@@ -1,6 +1,8 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useParams, useLocation, Link } from 'react-router-dom'
-import { getInvoiceById, getInvoicePayments, paymentState } from '../../services/invoiceService'
+import {
+  getInvoiceById, getInvoicePayments, paymentState, invoiceVatRate, splitVat,
+} from '../../services/invoiceService'
 import {
   resolveAccounts, resolvePaymentTypes, payInvoice, validateInvoice, isCashLabel,
 } from '../../services/invoiceOps'
@@ -40,6 +42,7 @@ function FrontPaymentPage({ client }) {
     accountId: '',
     typeId: '',
     amount: '',
+    vatRate: '',
   })
 
   const load = useCallback(async () => {
@@ -62,6 +65,10 @@ function FrontPaymentPage({ client }) {
       amount: inv.remaining > 0 ? inv.remaining.toFixed(2) : '',
       accountId: f.accountId || String(acc.list[0]?.id ?? ''),
       typeId: f.typeId || pt.bank,
+      // Le taux de la facture est proposé par défaut — remise comprise, elle
+      // est déjà dans le HT sur lequel il est calculé. `f.vatRate ||` préserve
+      // une saisie en cours lors d'un rechargement après écriture.
+      vatRate: f.vatRate || String(invoiceVatRate(inv).rate),
     }))
     return inv
   }, [id])
@@ -115,13 +122,26 @@ function FrontPaymentPage({ client }) {
         )
       }
 
+      const taux = Number(String(form.vatRate).replace(',', '.'))
+      if (!Number.isFinite(taux) || taux < 0 || taux > 100) {
+        throw new Error('Le taux de TVA doit être compris entre 0 et 100.')
+      }
+
+      // `paymentsdistributed` n'accepte qu'un montant : Dolibarr enregistre le
+      // règlement TTC et rien d'autre. La ventilation est portée par le
+      // commentaire, seul champ libre de l'endpoint — elle reste ainsi lisible
+      // sur la fiche du règlement, au lieu de n'exister qu'à l'écran.
+      const part = splitVat(amount, taux)
+
       await payInvoice({
         invoiceId: id,
         amount,
         date: paidAt,
         accountId: form.accountId,
         paymentTypeId: form.typeId,
-        comment: `Règlement en ligne — ${client.name}`,
+        comment:
+          `Règlement en ligne — ${client.name} — ` +
+          `${money(part.ht)} HT + ${money(part.tva)} TVA (${taux} %)`,
       })
 
       const refreshed = await load()
@@ -136,6 +156,14 @@ function FrontPaymentPage({ client }) {
       setBusy(false)
     }
   }
+
+  // Taux d'origine de la facture, et ventilation du montant en cours de saisie.
+  // Les deux se recalculent à chaque frappe, sans requête.
+  const vat = useMemo(() => (invoice ? invoiceVatRate(invoice) : null), [invoice])
+  const part = useMemo(
+    () => splitVat(Number(String(form.amount).replace(',', '.')) || 0, form.vatRate),
+    [form.amount, form.vatRate]
+  )
 
   if (loading) return <div className="fp-state">Chargement de la facture...</div>
   if (error && !invoice) return <div className="fp-state fp-state--error">Erreur : {error}</div>
@@ -188,6 +216,14 @@ function FrontPaymentPage({ client }) {
         <div className="fp-recap-row">
           <span>Émise le {day(invoice.date)}</span>
           <span>Échéance {day(invoice.dateLimite)}</span>
+        </div>
+        <div className="fp-recap-row">
+          <span>Total HT{invoice.lines.some((l) => l.remise > 0) ? ', remise déduite' : ''}</span>
+          <span>{money(invoice.ht)}</span>
+        </div>
+        <div className="fp-recap-row">
+          <span>dont TVA{vat.rate > 0 ? ` (${vat.rate} %${vat.uniform ? '' : ' en moyenne'})` : ''}</span>
+          <span>{money(invoice.tva)}</span>
         </div>
         <div className="fp-recap-row">
           <span>Total TTC</span>
@@ -308,6 +344,34 @@ function FrontPaymentPage({ client }) {
                 Reste à payer : {money(invoice.remaining)} — un montant inférieur est accepté.
               </span>
             </label>
+
+            <label className="fp-field">
+              <span className="fp-field-label">TVA (%)</span>
+              <input
+                type="text"
+                inputMode="decimal"
+                className="fp-input fp-input--amount"
+                value={form.vatRate}
+                onChange={(e) => setForm({ ...form, vatRate: e.target.value })}
+                disabled={busy}
+                required
+              />
+              <span className="fp-field-hint">
+                {vat.uniform
+                  ? `Taux de la facture, remise déduite : ${vat.rate} %.`
+                  : `Cette facture mêle plusieurs taux (${vat.rates.join(' %, ')} %) : ` +
+                    `${vat.rate} % est le taux moyen, pondéré par les montants remisés.`}
+              </span>
+            </label>
+          </div>
+
+          {/* Le montant saisi est TTC — c'est ce que le client verse. La part de
+              TVA s'en déduit au taux ci-dessus. */}
+          <div className="fp-recap-row">
+            <span>Ventilation du règlement</span>
+            <span className="fp-vat-split">
+              {money(part.ht)} HT + {money(part.tva)} TVA
+            </span>
           </div>
 
           {error && <div className="fp-error">{error}</div>}

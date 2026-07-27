@@ -621,6 +621,13 @@
 .fp-input:focus { border-color: var(--c-accent); box-shadow: 0 0 0 3px var(--c-accent-muted); }
 .fp-input--amount { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
 
+/* Ventilation HT / TVA du règlement en cours de saisie. */
+.fp-vat-split {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--c-text);
+}
+
 .fp-error {
   margin-top: 0.8rem;
   padding: 0.6rem 0.85rem;

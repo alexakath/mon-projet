@@ -176,6 +176,30 @@ payer. Un montant inférieur est accepté — la facture reste alors partielleme
 réglée, et se solde au règlement suivant. Un montant supérieur au restant dû est
 refusé avant l'envoi.
 
+### Champ TVA
+
+Un champ **TVA (%)** complète la saisie, pré-rempli avec le taux de la facture
+réglée. Le montant saisi étant TTC — c'est ce que le client verse —, ce taux le
+ventile en HT et TVA, affichés sous le formulaire et recalculés à chaque frappe.
+
+**Le taux proposé se lit sur la facture telle qu'elle est, remise comprise.**
+Dolibarr applique la remise au HT, puis la TVA sur ce HT réduit : le rapport
+`total_tva / total_ht` donne donc directement le taux effectif. Repartir du taux
+catalogue du produit reviendrait à ignorer la remise. Vérifié sur F002, remisée
+à 15,5 % : le taux proposé est bien 20 %, et un règlement de 150 se ventile en
+125,00 HT + 25,00 TVA.
+
+Une facture peut mêler plusieurs taux — F001 porte du 14,5 % et du 20 %. Il
+n'existe alors pas de « taux de la facture » : l'application propose le taux
+moyen **pondéré par les montants remisés** (15,88 % pour F001) et le signale
+sous le champ, plutôt que de retenir arbitrairement celui de la première ligne.
+Le champ reste modifiable.
+
+> `POST /invoices/paymentsdistributed` n'accepte qu'un montant : Dolibarr
+> enregistre le règlement TTC, sans ventilation. Celle-ci est donc écrite dans
+> le **commentaire** du règlement — seul champ libre de l'endpoint — où elle
+> reste lisible depuis Dolibarr : `… — 125,00 HT + 25,00 TVA (20 %)`.
+
 Les écritures vers Dolibarr (ligne, validation, règlement) sont mutualisées dans
 `src/services/invoiceOps.js`, partagé avec l'import CSV : les contraintes de
 l'API n'existent qu'à un seul endroit.

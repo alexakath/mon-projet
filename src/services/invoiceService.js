@@ -70,10 +70,47 @@ function normalizeInvoice(inv, clientName) {
       qty: num(l.qty),
       unitPrice: num(l.subprice),
       remise: num(l.remise_percent),
+      tvaRate: num(l.tva_tx),
       ht: num(l.total_ht),
+      tva: num(l.total_tva),
       ttc: num(l.total_ttc),
     })),
   }
+}
+
+// ─── TVA d'une facture ───────────────────────────────────────────────────────
+
+const round2 = (n) => Math.round(n * 100) / 100
+
+// Le taux à retenir pour ventiler un règlement.
+//
+// Il se lit sur la facture telle qu'elle est, remise comprise : Dolibarr
+// applique la remise au HT puis la TVA sur ce HT réduit, si bien que le rapport
+// `total_tva / total_ht` donne déjà le taux effectif — inutile, et faux, de
+// repartir du taux catalogue du produit.
+//
+// Une facture peut mêler plusieurs taux (F001 porte du 14,5 % et du 20 %). Il
+// n'existe alors pas de « taux de la facture » : on renvoie le taux moyen
+// pondéré, en signalant qu'il est composite pour que l'écran puisse le dire.
+export function invoiceVatRate(invoice) {
+  const lines = invoice.lines ?? []
+  const rates = [...new Set(lines.map((l) => round2(l.tvaRate)).filter((r) => r > 0))]
+
+  if (rates.length === 1) return { rate: rates[0], uniform: true, rates }
+
+  // Sans ligne exploitable — facture chargée sans son détail — le rapport des
+  // totaux reste disponible et suffit.
+  const rate = invoice.ht > 0 ? round2((invoice.tva / invoice.ht) * 100) : 0
+  return { rate, uniform: rates.length === 0, rates }
+}
+
+// Ventile un montant TTC au taux donné. Le règlement est saisi TTC : c'est ce
+// que le client verse, la part de TVA s'en déduit.
+export function splitVat(amountTtc, rate) {
+  const ttc = Number(amountTtc) || 0
+  const taux = Number(rate) || 0
+  const ht = round2(ttc / (1 + taux / 100))
+  return { ttc: round2(ttc), ht, tva: round2(ttc - ht) }
 }
 
 // Charge tout ce dont le tableau de bord a besoin, en deux requêtes.

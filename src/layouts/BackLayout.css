@@ -1,0 +1,12 @@
+.back-layout {
+  display: flex;
+  min-height: 100svh;
+  width: 100%;
+}
+
+.back-main {
+  flex: 1;
+  overflow-y: auto;
+  background: var(--c-bg);
+  min-width: 0;
+}

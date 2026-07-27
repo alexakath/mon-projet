@@ -1,0 +1,19 @@
+.users-search {
+  width: 100%;
+  max-width: 320px;
+  padding: 0.55rem 0.875rem;
+  margin-bottom: 1rem;
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-md);
+  font-size: 0.875rem;
+  font-family: var(--font);
+  color: var(--c-text);
+  background: var(--c-surface);
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.users-search:focus {
+  border-color: var(--c-accent);
+  box-shadow: 0 0 0 3px var(--c-accent-muted);
+}

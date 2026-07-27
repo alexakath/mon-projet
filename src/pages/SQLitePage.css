@@ -1,0 +1,39 @@
+.sql-card {
+  flex: 1;
+  min-width: 130px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-md);
+  padding: 0.875rem 1rem;
+  box-shadow: var(--shadow-xs);
+  cursor: pointer;
+  font-family: var(--font);
+  text-align: left;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+
+.sql-card:hover {
+  border-color: var(--c-accent);
+  box-shadow: var(--shadow-sm);
+}
+
+.sql-card--active {
+  border-color: var(--c-accent);
+  background: var(--c-accent-soft);
+}
+
+.sql-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.sql-cell {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.78rem;
+}

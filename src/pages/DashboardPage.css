@@ -1,0 +1,167 @@
+.db-section {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-lg);
+  padding: 1.25rem 1.5rem 1.5rem;
+  margin-bottom: 1rem;
+  box-shadow: var(--shadow-sm);
+}
+
+.db-section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.db-section-title {
+  font-size: 0.625rem;
+  font-weight: 700;
+  color: var(--c-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin: 0 0 0.25rem;
+}
+
+.db-section-sub {
+  font-size: 0.8rem;
+  color: var(--c-text-muted);
+}
+
+.db-empty {
+  font-size: 0.875rem;
+  color: var(--c-text-muted);
+  padding: 1.5rem 0;
+  text-align: center;
+}
+
+.db-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-md);
+}
+
+/* Les chiffres s'alignent en colonne : chasse fixe obligatoire. */
+.db-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.db-strong { color: var(--c-text); font-weight: 600; }
+.db-value--paid { color: #059669; font-weight: 600; }
+.db-value--due { color: #ea580c; font-weight: 600; }
+
+.db-lead {
+  color: var(--c-text);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* ── Ligne dépliable ────────────────────────── */
+
+.db-row {
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.db-row:hover { background: #fafbfd; }
+.db-row:focus-visible { outline: 2px solid var(--c-accent); outline-offset: -2px; }
+
+.db-row--open { background: var(--c-accent-soft); }
+.db-row--open:hover { background: var(--c-accent-soft); }
+.db-row--open td { border-bottom-color: transparent; }
+
+.db-caret {
+  display: inline-block;
+  width: 1rem;
+  color: var(--c-text-muted);
+  font-weight: 700;
+  transition: transform 0.15s;
+}
+
+.db-caret--open {
+  transform: rotate(90deg);
+  color: var(--c-accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .db-caret { transition: none; }
+}
+
+.db-detail-row > td {
+  padding: 0 0 0.75rem;
+  background: var(--c-accent-soft);
+  border-bottom: 1px solid var(--c-border);
+}
+
+.db-nested {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-sm);
+  margin: 0 0.75rem;
+  width: calc(100% - 1.5rem);
+}
+
+.db-nested thead tr { background: var(--c-border-soft); }
+.db-nested th { font-size: 0.6rem; padding: 8px 12px; }
+.db-nested td { padding: 9px 12px; font-size: 0.82rem; }
+
+/* ── Barre d'avancement ─────────────────────── */
+
+.db-bar-col { width: 130px; }
+
+.db-bar {
+  display: block;
+  height: 6px;
+  background: var(--c-border-soft);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.db-bar-fill {
+  display: block;
+  height: 100%;
+  background: #059669;
+  border-radius: 3px;
+}
+
+/* ── Étiquettes ─────────────────────────────── */
+
+.db-ref {
+  display: inline-block;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--c-accent);
+  background: var(--c-accent-soft);
+  border-radius: 3px;
+  padding: 1px 6px;
+  margin-right: 0.5rem;
+}
+
+.db-tag {
+  display: inline-block;
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #92400e;
+  background: #fef3c7;
+  border-radius: 3px;
+  padding: 1px 6px;
+  margin-left: 0.5rem;
+}
+
+.db-tag--draft { color: #6b7280; background: #f3f4f6; }
+
+/* ── Pied de tableau ────────────────────────── */
+
+.db-total td {
+  border-top: 1px solid var(--c-border);
+  background: var(--c-bg);
+  font-weight: 700;
+  color: var(--c-text);
+  padding: 11px 16px;
+  font-variant-numeric: tabular-nums;
+}

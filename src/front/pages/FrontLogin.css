@@ -1,0 +1,108 @@
+.fc-page {
+  min-height: 100svh;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--c-bg);
+  padding: 1.5rem;
+}
+
+.fc-card {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-md);
+  padding: 2.5rem 2.5rem 2rem;
+  width: 100%;
+  max-width: 400px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+
+.fc-brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  margin-bottom: 0.75rem;
+}
+
+.fc-brand-name {
+  font-size: 1.5rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  color: var(--c-text);
+}
+
+.fc-dot { color: var(--c-accent); }
+
+.fc-brand-sub {
+  font-size: 0.72rem;
+  color: var(--c-text-muted);
+  font-weight: 500;
+}
+
+.fc-intro {
+  font-size: 0.825rem;
+  color: var(--c-text-sec);
+  line-height: 1.6;
+  text-align: center;
+  margin-bottom: 0.5rem;
+}
+
+.fc-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--c-text-muted);
+}
+
+.fc-input {
+  width: 100%;
+  padding: 0.65rem 0.875rem;
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-md);
+  font-family: var(--font);
+  font-size: 0.95rem;
+  color: var(--c-text);
+  background: var(--c-bg);
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.fc-input:focus {
+  border-color: var(--c-accent);
+  box-shadow: 0 0 0 3px var(--c-accent-muted);
+}
+
+.fc-input:disabled { opacity: 0.6; }
+
+.fc-error {
+  font-size: 0.8rem;
+  color: #991b1b;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: var(--r-sm);
+  padding: 0.5rem 0.75rem;
+}
+
+.fc-btn {
+  width: 100%;
+  padding: 0.65rem;
+  margin-top: 0.25rem;
+  background: var(--c-accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--r-md);
+  font-family: var(--font);
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.fc-btn:hover:not(:disabled) { background: var(--c-accent-hover); }
+.fc-btn:disabled { opacity: 0.55; cursor: not-allowed; }

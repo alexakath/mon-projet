@@ -1,6 +1,8 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
-import { getCart, setQuantity, removeFromCart, clearCart, cartTotals } from '../../services/cartService'
+import {
+  getCart, setQuantity, removeFromCart, clearCart, cartTotals, remiseImportTotal,
+} from '../../services/cartService'
 import { getRemises, findRule, sortRules } from '../../services/remiseService'
 import { createInvoiceFromCart } from '../../services/orderService'
 import './FrontPages.css'
@@ -37,6 +39,8 @@ function FrontCartPage({ client, onCartChange }) {
   // client versera. Les deux sont affichés, parce que les deux existent.
   const plein = useMemo(() => cartTotals(items, 0), [items])
   const totals = useMemo(() => cartTotals(items, rate), [items, rate])
+  // Indicatif seul : jamais déduit du prix de la commande.
+  const remiseProduit = useMemo(() => remiseImportTotal(items), [items])
 
   const dueDate = useMemo(() => {
     const now = new Date()
@@ -93,7 +97,6 @@ function FrontCartPage({ client, onCartChange }) {
               <th className="fp-center">Quantité</th>
               <th className="fp-right">Total HT</th>
               <th className="fp-right">Remise produit</th>
-              <th className="fp-right">Facturé HT</th>
               <th className="fp-right">Remise règlement {rate > 0 ? `${rate} %` : ''}</th>
               <th className="fp-right">Net HT</th>
               <th />
@@ -101,14 +104,12 @@ function FrontCartPage({ client, onCartChange }) {
           </thead>
           <tbody>
             {items.map((item) => {
-              // Les deux remises en cascade, dans l'ordre : celle de l'article
-              // (relevée à l'import) réduit le montant facturé ; celle du
-              // barème s'applique ensuite, sur ce qu'il en reste.
+              // Seule la remise de règlement entre dans le calcul. Celle de
+              // l'article est affichée à côté, sans être déduite : votre
+              // commande est facturée au prix du catalogue.
               const brutHt = item.qty * item.ht
               const tauxProduit = Number(item.remiseImport) || 0
-              const remiseProduit = (brutHt * tauxProduit) / 100
-              const factureHt = brutHt - remiseProduit
-              const remiseHt = (factureHt * rate) / 100
+              const remiseHt = (brutHt * rate) / 100
 
               return (
               <tr key={item.productId}>
@@ -132,14 +133,13 @@ function FrontCartPage({ client, onCartChange }) {
                 <td className="fp-right fp-bold">{money(brutHt)}</td>
                 <td className="fp-right">
                   {tauxProduit > 0
-                    ? <span className="fp-paid">− {money(remiseProduit)} ({tauxProduit} %)</span>
+                    ? <span className="fp-cart-tva">{tauxProduit} % vu à l'import</span>
                     : '—'}
                 </td>
-                <td className="fp-right">{money(factureHt)}</td>
                 <td className="fp-right">
                   {rate > 0 ? <span className="fp-paid">− {money(remiseHt)}</span> : '—'}
                 </td>
-                <td className="fp-right">{money(factureHt - remiseHt)}</td>
+                <td className="fp-right">{money(brutHt - remiseHt)}</td>
                 <td className="fp-right">
                   <button
                     className="fp-link-btn fp-link-btn--danger"
@@ -227,25 +227,6 @@ function FrontCartPage({ client, onCartChange }) {
           <span>Total HT catalogue</span>
           <span>{money(plein.brutHt)}</span>
         </div>
-
-        {/* Remise 1 sur 2 : celle de l'article. Elle réduit le montant
-            facturé, contrairement à celle du barème plus bas. */}
-        {plein.remiseImport > 0 && (
-          <>
-            <div className="fp-recap-row">
-              <span>
-                Remise produit
-                <span className="fp-recap-rule"> — tarif consenti sur l'article</span>
-              </span>
-              <span className="fp-paid">− {money(plein.remiseImport)}</span>
-            </div>
-            <div className="fp-recap-row">
-              <span>Net HT</span>
-              <span>{money(plein.factureHt)}</span>
-            </div>
-          </>
-        )}
-
         <div className="fp-recap-row">
           <span>TVA</span>
           <span>{money(plein.tva)}</span>
@@ -282,10 +263,12 @@ function FrontCartPage({ client, onCartChange }) {
           {busy ? 'Création de la facture…' : 'Valider et créer ma facture'}
         </button>
         <p className="fp-hint">
-          La facture sera émise à votre nom pour {money(plein.ttc)} TTC
-          {plein.remiseImport > 0 ? ', remise produit déduite' : ', le prix plein'}.
+          La facture sera émise à votre nom pour {money(plein.ttc)} TTC, le prix catalogue.
           {rate > 0
             ? ` La remise de règlement de ${rate} % vous sera accordée à l'encaissement : vous ne réglerez que ${money(totals.ttc)}.`
+            : ''}
+          {remiseProduit > 0
+            ? ` À titre indicatif, ces articles ont déjà été facturés avec une remise produit (${money(remiseProduit)} HT) sur une commande passée ; elle n'est pas reconduite ici.`
             : ''}
         </p>
       </section>

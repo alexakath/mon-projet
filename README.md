@@ -256,14 +256,18 @@ règlement. Le barème est stocké en SQLite et se règle depuis `/remises` —
 code.
 
 Un palier est un **intervalle de jours fermé aux deux bouts** : `jours_min` et
-`jours_max` sont tous deux inclus.
+`jours_max` sont tous deux inclus. `findRule` le teste littéralement —
+`délai >= jours_min && délai <= jours_max` — si bien qu'un palier `1 → 7` couvre
+le 7ᵉ jour et que le suivant doit démarrer à 8. Les libellés livrés disent donc
+« ou moins », et non « moins de ».
 
 | Libellé | Du jour | Au jour | Remise |
 | --- | --- | --- | --- |
 | Règlement immédiat | 0 | 0 | 30 % |
-| Moins d'une semaine | 1 | 7 | 15 % |
-| Moins d'un mois | 8 | 30 | 10 % |
-| Au-delà d'un mois | 31 | *(sans fin)* | 0 % |
+| 7 jours ou moins | 1 | 7 | 20 % |
+| 15 jours ou moins | 8 | 15 | 15 % |
+| 30 jours ou moins | 16 | 30 | 10 % |
+| Au-delà de 30 jours | 31 | *(sans fin)* | 0 % |
 
 ### Pourquoi deux bornes plutôt qu'un seuil
 

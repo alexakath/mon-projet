@@ -89,52 +89,42 @@ export function cartCount(items) {
   return items.reduce((sum, i) => sum + i.qty, 0)
 }
 
-// Totaux du panier, deux remises appliquées **en cascade** et dans cet ordre :
+// Totaux du panier pour un taux de remise donné. La remise s'applique au HT,
+// la TVA vient ensuite — même ordre que Dolibarr.
 //
-//   1. la **remise produit**, relevée à l'import (colonne `remise` du CSV).
-//      C'est une remise commerciale attachée à l'article : elle réduit le HT,
-//      donc la TVA, donc le montant réellement facturé. C'est celle que porte
-//      la ligne F002 du jeu d'essai, à 15,50 %.
-//   2. la **remise de règlement**, issue du barème selon le délai annoncé.
-//      Elle ne touche pas le montant facturé — la facture reste à son prix — et
-//      n'apparaît qu'à l'encaissement, en escompte.
+// Une seule remise entre dans le calcul : celle du **barème**, selon le délai
+// de règlement annoncé. Un achat au catalogue est facturé au prix du catalogue.
 //
-// L'ordre compte : 1 800 remisés de 15,50 % puis de 30 % ne font pas 1 800
-// remisés de 45,50 %. La seconde s'applique à ce que la première a laissé.
-//
-// D'où trois montants, et non deux : le brut catalogue (`brutHt`), le facturé
-// (`ht`/`ttc` quand `discountRate` vaut 0), et le net à payer (`ttc` avec le
-// taux du barème).
+// La `remiseImport` que portent les articles n'est **pas** déduite ici, et c'est
+// délibéré : c'est un tarif relevé sur une facture passée, pas un prix en
+// vigueur. La déduire ferait payer 4 621,55 une commande annoncée à 4 941,00 au
+// catalogue. Elle reste affichée à titre indicatif (cf. `remiseImportTotal`),
+// et n'a d'effet que là où le CSV l'a écrite : sur les lignes importées.
 export function cartTotals(items, discountRate = 0) {
   const rate = Number(discountRate) || 0
 
-  const totals = items.reduce(
+  return items.reduce(
     (acc, item) => {
       const brut = item.qty * item.ht
-
-      // 1. Remise produit → ce qui sera porté sur la facture.
-      const tauxProduit = Number(item.remiseImport) || 0
-      const remiseProduit = (brut * tauxProduit) / 100
-      const factureHt = brut - remiseProduit
-
-      // 2. Remise de règlement → ce qui sera réellement encaissé.
-      const ht = factureHt * (1 - rate / 100)
+      const ht = brut * (1 - rate / 100)
       const ttc = ht * (1 + (item.tva || 0) / 100)
-
       return {
-        brutHt: acc.brutHt + brut,
-        remiseImport: acc.remiseImport + remiseProduit,
-        factureHt: acc.factureHt + factureHt,
-        ht: acc.ht + ht,
-        tva: acc.tva + (ttc - ht),
-        ttc: acc.ttc + ttc,
-        remise: acc.remise + (factureHt - ht),
+        brutHt: round(acc.brutHt + brut),
+        ht: round(acc.ht + ht),
+        tva: round(acc.tva + (ttc - ht)),
+        ttc: round(acc.ttc + ttc),
+        remise: round(acc.remise + (brut - ht)),
       }
     },
-    { brutHt: 0, remiseImport: 0, factureHt: 0, ht: 0, tva: 0, ttc: 0, remise: 0 }
+    { brutHt: 0, ht: 0, tva: 0, ttc: 0, remise: 0 }
   )
+}
 
-  // Arrondi une seule fois, à la fin : arrondir chaque cumul intermédiaire
-  // ferait dériver le total de quelques centimes sur un panier fourni.
-  return Object.fromEntries(Object.entries(totals).map(([k, v]) => [k, round(v)]))
+// Montant qu'aurait représenté la remise produit si elle avait été appliquée.
+// Sert uniquement à l'affichage : le panier signale au client le tarif déjà
+// consenti sur cet article par le passé, sans toucher au prix de sa commande.
+export function remiseImportTotal(items) {
+  return round(
+    items.reduce((sum, i) => sum + (i.qty * i.ht * (Number(i.remiseImport) || 0)) / 100, 0)
+  )
 }

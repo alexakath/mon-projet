@@ -87,11 +87,11 @@ function FrontProductsPage({ client, onCartChange }) {
                 {money(p.ht)} HT · TVA {p.tva} %
               </div>
 
-              {/* Remise commerciale relevée à l'import : elle est acquise dès
-                  l'ajout au panier, contrairement à celle du barème. */}
+              {/* Remise relevée sur une facture passée. Indicative : la
+                  commande reste facturée au prix catalogue ci-dessus. */}
               {p.remiseImport > 0 && (
-                <div className="fp-product-detail fp-paid">
-                  Remise produit {p.remiseImport} % · facturé {money(p.ttcRemise)} TTC
+                <div className="fp-product-detail">
+                  Déjà remisé {p.remiseImport} % à l'import
                 </div>
               )}
 

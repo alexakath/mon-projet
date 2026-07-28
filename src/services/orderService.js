@@ -88,12 +88,11 @@ export async function createInvoiceFromCart({ client, items, days, date: dateInp
       qty: item.qty,
       subprice: item.ht,
       tva: item.tva,
-      // Seule la remise **produit** est portée par la ligne : c'est une remise
-      // commerciale, elle fait partie du prix facturé, exactement comme la
-      // colonne `remise` du CSV d'import. Celle du barème n'y est pas — elle
-      // n'entrera qu'à l'encaissement, en escompte, pour laisser le montant
-      // facturé intact.
-      remise: item.remiseImport ?? 0,
+      // Aucune remise sur la ligne : la facture porte le prix catalogue. Ni
+      // celle du barème — qui n'entrera qu'à l'encaissement, en escompte, pour
+      // laisser le montant facturé intact — ni la `remiseImport` de l'article,
+      // qui n'est qu'une indication relevée sur une facture passée.
+      remise: 0,
       productId: item.productId,
     })
     lines.push({ ...item, lineId })

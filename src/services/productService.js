@@ -50,11 +50,10 @@ export async function getProducts() {
       ht,
       tva,
       ttc: Math.round(ttc * 100) / 100,
-      // Remise commerciale de l'article, appliquée **avant** celle du barème.
+      // Remise relevée sur une facture passée, affichée à titre indicatif.
+      // Elle n'est **pas** déduite d'une nouvelle commande : le prix qui fait
+      // foi reste `ttc`, celui du catalogue.
       remiseImport,
-      // Prix effectivement facturé une fois la remise produit déduite. Le prix
-      // catalogue reste `ttc` : c'est le maximum, remise non comprise.
-      ttcRemise: Math.round(ttc * (1 - remiseImport / 100) * 100) / 100,
       onSale: String(p.status) === '1',
       stock: p.stock_reel != null ? num(p.stock_reel) : null,
     }

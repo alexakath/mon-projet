@@ -69,11 +69,16 @@ const MODULES = {
       })()
     },
     columns: ['libelle', 'jours_min', 'jours_max', 'taux'],
+    // Les bornes sont **incluses des deux côtés** (cf. findRule : `delay >= min
+    // && delay <= max`). « 7 jours ou moins » se saisit donc 1 → 7, le jour 7
+    // compris, et le palier suivant démarre à 8. Les libellés disent « ou
+    // moins » et non « moins de » pour que l'étiquette et la borne s'accordent.
     seed: [
       { libelle: 'Règlement immédiat', jours_min: 0, jours_max: 0, taux: 30 },
-      { libelle: "Moins d'une semaine", jours_min: 1, jours_max: 7, taux: 15 },
-      { libelle: "Moins d'un mois", jours_min: 8, jours_max: 30, taux: 10 },
-      { libelle: "Au-delà d'un mois", jours_min: 31, jours_max: null, taux: 0 },
+      { libelle: '7 jours ou moins', jours_min: 1, jours_max: 7, taux: 20 },
+      { libelle: '15 jours ou moins', jours_min: 8, jours_max: 15, taux: 15 },
+      { libelle: '30 jours ou moins', jours_min: 16, jours_max: 30, taux: 10 },
+      { libelle: 'Au-delà de 30 jours', jours_min: 31, jours_max: null, taux: 0 },
     ],
     validate: (row) => {
       const libelle = String(row.libelle ?? '').trim()

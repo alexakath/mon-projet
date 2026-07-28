@@ -3,6 +3,7 @@ import {
   getBillingData, groupByMonth, aggregateProducts, totals,
   paymentState, STATUT_LABELS,
 } from '../services/invoiceService'
+import { getHistorique } from '../services/historiqueService'
 import './DashboardPage.css'
 
 const money = (n) =>
@@ -30,6 +31,7 @@ function ProgressBar({ paid, total }) {
 
 function DashboardPage() {
   const [invoices, setInvoices] = useState([])
+  const [historique, setHistorique] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
@@ -41,11 +43,28 @@ function DashboardPage() {
       .then(setInvoices)
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false))
+
+    // Le backend SQLite est optionnel : son absence rend la section historique
+    // vide, elle ne fait pas échouer le tableau de bord.
+    getHistorique().then(setHistorique).catch(() => setHistorique([]))
   }, [])
 
   const { months, undated } = useMemo(() => groupByMonth(invoices), [invoices])
   const products = useMemo(() => aggregateProducts(invoices), [invoices])
   const grand = useMemo(() => totals(invoices), [invoices])
+  const histoTotal = useMemo(
+    () =>
+      historique.reduce(
+        (acc, h) => ({
+          facture: acc.facture + Number(h.montant_facture || 0),
+          paye: acc.paye + Number(h.paye_reel || 0),
+          remise: acc.remise + Number(h.remise_reglement || 0),
+          reste: acc.reste + Number(h.reste_a_payer || 0),
+        }),
+        { facture: 0, paye: 0, remise: 0, reste: 0 }
+      ),
+    [historique]
+  )
   const salesTotal = useMemo(
     () => products.reduce((acc, p) => ({ ht: acc.ht + p.ht, ttc: acc.ttc + p.ttc, qty: acc.qty + p.qty }), { ht: 0, ttc: 0, qty: 0 }),
     [products]
@@ -82,6 +101,7 @@ function DashboardPage() {
           ttc: undated.reduce((s, i) => s + i.ttc, 0),
           paid: undated.reduce((s, i) => s + i.paid, 0),
           remaining: undated.reduce((s, i) => s + i.remaining, 0),
+          remise: undated.reduce((s, i) => s + i.remiseReglement, 0),
         }]
       : []),
   ]
@@ -98,22 +118,25 @@ function DashboardPage() {
         </span>
       </div>
 
+      {/* Les trois montants d'une facture remisée : ce qui a été facturé au
+          prix plein, ce qui a été encaissé, et l'écart abandonné en remise de
+          règlement. Facturé = réglé + remise + reste. */}
       <div className="summary-row">
         <div className="summary-card">
           <div className="summary-card-value">{money(grand.ttc)}</div>
-          <div className="summary-card-label">Facturé TTC</div>
+          <div className="summary-card-label">Montant facture réel TTC</div>
         </div>
         <div className="summary-card">
           <div className="summary-card-value db-value--paid">{money(grand.paid)}</div>
-          <div className="summary-card-label">Réglé</div>
+          <div className="summary-card-label">Réglé réellement</div>
+        </div>
+        <div className="summary-card">
+          <div className="summary-card-value db-value--paid">{money(grand.remise)}</div>
+          <div className="summary-card-label">Remise règlement</div>
         </div>
         <div className="summary-card">
           <div className="summary-card-value db-value--due">{money(grand.remaining)}</div>
-          <div className="summary-card-label">Reste à percevoir</div>
-        </div>
-        <div className="summary-card">
-          <div className="summary-card-value">{money(grand.ht)}</div>
-          <div className="summary-card-label">Facturé HT</div>
+          <div className="summary-card-label">Reste à payer</div>
         </div>
       </div>
 
@@ -133,9 +156,10 @@ function DashboardPage() {
               <tr>
                 <th>Mois</th>
                 <th className="db-num">Factures</th>
-                <th className="db-num">Total TTC</th>
-                <th className="db-num">Payé</th>
-                <th className="db-num">Restant</th>
+                <th className="db-num">Montant facture réel</th>
+                <th className="db-num">Payé réellement</th>
+                <th className="db-num">Remise règlement</th>
+                <th className="db-num">Reste à payer</th>
                 <th className="db-bar-col">Avancement</th>
               </tr>
             </thead>
@@ -162,13 +186,18 @@ function DashboardPage() {
                     <td className="db-num muted">{month.invoices.length}</td>
                     <td className="db-num db-strong">{money(month.ttc)}</td>
                     <td className="db-num db-value--paid">{money(month.paid)}</td>
+                    <td className="db-num db-value--paid">
+                      {month.remise > 0.01 ? money(month.remise) : '—'}
+                    </td>
                     <td className="db-num db-value--due">{money(month.remaining)}</td>
+                    {/* L'avancement se mesure sur l'encaissement seul : une
+                        remise solde la facture sans avoir été perçue. */}
                     <td className="db-bar-col"><ProgressBar paid={month.paid} total={month.ttc} /></td>
                   </tr>,
 
                   open && (
                     <tr key={`${month.key}-detail`} className="db-detail-row">
-                      <td colSpan={6}>
+                      <td colSpan={7}>
                         <table className="data-table db-nested">
                           <thead>
                             <tr>
@@ -176,9 +205,10 @@ function DashboardPage() {
                               <th>Client</th>
                               <th>Date</th>
                               <th>Échéance</th>
-                              <th className="db-num">TTC</th>
-                              <th className="db-num">Payé</th>
-                              <th className="db-num">Restant</th>
+                              <th className="db-num">Montant facture réel</th>
+                              <th className="db-num">Payé réellement</th>
+                              <th className="db-num">Remise règlement</th>
+                              <th className="db-num">Reste à payer</th>
                               <th>État</th>
                             </tr>
                           </thead>
@@ -197,6 +227,11 @@ function DashboardPage() {
                                   <td className="muted">{day(inv.dateLimite)}</td>
                                   <td className="db-num db-strong">{money(inv.ttc)}</td>
                                   <td className="db-num db-value--paid">{money(inv.paid)}</td>
+                                  <td className="db-num db-value--paid">
+                                    {inv.remiseReglement > 0.01
+                                      ? `${money(inv.remiseReglement)} (${inv.remiseRate} %)`
+                                      : '—'}
+                                  </td>
                                   <td className="db-num db-value--due">{money(inv.remaining)}</td>
                                   <td><span className={`state-pill ${STATE_PILL[state.key]}`}>{state.label}</span></td>
                                 </tr>
@@ -216,6 +251,7 @@ function DashboardPage() {
                 <td className="db-num">{grand.count}</td>
                 <td className="db-num">{money(grand.ttc)}</td>
                 <td className="db-num db-value--paid">{money(grand.paid)}</td>
+                <td className="db-num db-value--paid">{money(grand.remise)}</td>
                 <td className="db-num db-value--due">{money(grand.remaining)}</td>
                 <td />
               </tr>
@@ -323,6 +359,78 @@ function DashboardPage() {
           </table>
         </div>
       </div>
+
+      {/* ── Historique des règlements remisés (SQLite) ────────── */}
+      {/*
+        Le tableau ci-dessus se lit sur Dolibarr, qui ne connaît la remise
+        qu'une fois la facture encaissée et close. Celui-ci se lit sur SQLite,
+        où la décomposition est écrite dès la commande : on y voit donc aussi
+        les factures remisées encore en attente de règlement, avec le taux
+        consenti — que Dolibarr, lui, ne porte pas encore.
+      */}
+
+      {historique.length > 0 && (
+        <div className="db-section">
+          <div className="db-section-head">
+            <div>
+              <h3 className="db-section-title">Historique des règlements remisés</h3>
+              <p className="db-section-sub">
+                Ce qui a réellement été payé, conservé en base locale : montant facturé,
+                remise consentie, encaissement, reste.
+              </p>
+            </div>
+            <span className="page-count">{money(histoTotal.remise)} de remise</span>
+          </div>
+
+          <div className="db-scroll">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Facture</th>
+                  <th>Client</th>
+                  <th>Date</th>
+                  <th className="db-num">Montant facture réel</th>
+                  <th className="db-num">Taux</th>
+                  <th className="db-num">Remise règlement</th>
+                  <th className="db-num">Payé réellement</th>
+                  <th className="db-num">Reste à payer</th>
+                  <th>Réglée le</th>
+                </tr>
+              </thead>
+              <tbody>
+                {historique.map((h) => (
+                  <tr key={h.id}>
+                    <td className="db-lead">{h.facture_ref || `#${h.dolibarr_id}`}</td>
+                    <td className="muted">{h.nom_client || '—'}</td>
+                    <td className="muted">{h.date_facture || '—'}</td>
+                    <td className="db-num db-strong">{money(h.montant_facture)}</td>
+                    <td className="db-num muted">{h.taux_remise > 0 ? `${h.taux_remise} %` : '—'}</td>
+                    <td className="db-num db-value--paid">
+                      {h.remise_reglement > 0.01 ? money(h.remise_reglement) : '—'}
+                    </td>
+                    <td className="db-num db-value--paid">{money(h.paye_reel)}</td>
+                    <td className="db-num db-value--due">{money(h.reste_a_payer)}</td>
+                    <td className="muted">{h.date_reglement || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="db-total">
+                  <td>Total</td>
+                  <td />
+                  <td />
+                  <td className="db-num">{money(histoTotal.facture)}</td>
+                  <td />
+                  <td className="db-num db-value--paid">{money(histoTotal.remise)}</td>
+                  <td className="db-num db-value--paid">{money(histoTotal.paye)}</td>
+                  <td className="db-num db-value--due">{money(histoTotal.reste)}</td>
+                  <td />
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

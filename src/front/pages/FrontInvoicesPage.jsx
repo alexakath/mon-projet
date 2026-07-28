@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import { Link } from 'react-router-dom'
-import { getBillingData, paymentState, totals } from '../../services/invoiceService'
+import { getBillingData, paymentState, decomposeInvoice } from '../../services/invoiceService'
 import './FrontPages.css'
 
 const money = (n) =>
@@ -27,7 +27,12 @@ function FrontInvoicesPage({ client }) {
       .finally(() => setLoading(false))
   }, [client.id])
 
-  const mine = useMemo(() => totals(invoices), [invoices])
+  // Ce que le client doit réellement : la somme des nets remisés, pas celle des
+  // restants dus de Dolibarr, qui portent encore le prix plein.
+  const reste = useMemo(
+    () => invoices.reduce((sum, inv) => sum + decomposeInvoice(inv).netRemaining, 0),
+    [invoices]
+  )
 
   if (loading) return <div className="fp-state">Chargement de vos factures...</div>
   if (error) return <div className="fp-state fp-state--error">Erreur : {error}</div>
@@ -40,7 +45,7 @@ function FrontInvoicesPage({ client }) {
           <h1 className="fp-title fp-title--sm">Mes factures</h1>
         </div>
         {invoices.length > 0 && (
-          <span className="fp-total">{money(mine.remaining)} restant</span>
+          <span className="fp-total">{money(reste)} restant</span>
         )}
       </header>
 
@@ -50,9 +55,12 @@ function FrontInvoicesPage({ client }) {
         <ul className="fp-cards">
           {invoices.map((inv) => {
             const state = paymentState(inv)
+            // Sans le backend, le taux se lit dans la note de la facture : la
+            // liste peut donc annoncer le net dû sans dépendre de SQLite.
+            const { rate, remise, netRemaining } = decomposeInvoice(inv)
             const pct = inv.ttc > 0 ? Math.min(100, (inv.paid / inv.ttc) * 100) : 0
             const draft = inv.statut === '0'
-            const settled = inv.remaining <= 0.01
+            const settled = netRemaining <= 0.01
 
             return (
               <li key={inv.id} className="fp-card-slot">
@@ -86,10 +94,16 @@ function FrontInvoicesPage({ client }) {
                   <span className="fp-card-bar-fill" style={{ width: `${pct}%` }} />
                 </div>
 
+                {/* La facture porte le prix plein ; la remise annoncée n'est
+                    acquise qu'au règlement. On montre donc les deux, pour que
+                    le montant à verser ne soit pas une surprise. */}
                 <div className="fp-card-figures">
-                  <span><b>{money(inv.ttc)}</b> TTC</span>
+                  <span><b>{money(inv.ttc)}</b> TTC facturés</span>
+                  {rate > 0 && (
+                    <span className="fp-paid">− {money(remise)} de remise ({rate} %)</span>
+                  )}
                   <span className="fp-paid">{money(inv.paid)} réglé</span>
-                  <span className="fp-due">{money(inv.remaining)} restant</span>
+                  <span className="fp-due">{money(netRemaining)} restant</span>
                 </div>
 
                 <div className="fp-card-action">

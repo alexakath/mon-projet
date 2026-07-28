@@ -1,8 +1,12 @@
 import { createInvoice, addInvoiceLine, validateInvoice } from './invoiceOps'
 import { getRemises, findRule } from './remiseService'
 import { cartTotals } from './cartService'
+import { buildHistorique, saveHistorique } from './historiqueService'
 
 const DAY = 86400
+
+const money = (n) =>
+  Number(n || 0).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
 // Midi UTC : la date de facture ne doit pas dépendre de l'heure ni du fuseau
 // dans lequel le panier est validé.
@@ -21,16 +25,33 @@ export const fromInputDate = (value) => {
 
 // Le client annonce dans combien de jours il réglera ; le barème en déduit la
 // remise. C'est cet engagement qui est facturé, pas le règlement lui-même.
+// `plein` est le panier au tarif catalogue, `totals` le même panier une fois la
+// remise appliquée. Les deux sont rendus parce que les deux sont écrits : le
+// prix plein part chez Dolibarr, le net sert de montant à encaisser.
 export async function quoteFromDelay(items, days) {
   const rules = await getRemises()
   const rule = findRule(rules, days)
   const rate = rule ? Number(rule.taux) : 0
-  return { rules, rule, rate, totals: cartTotals(items, rate) }
+  return { rules, rule, rate, plein: cartTotals(items, 0), totals: cartTotals(items, rate) }
 }
 
-// Validation du panier : crée la facture, ses lignes remisées, puis la valide.
-// La facture est validée dans la foulée : elle y gagne sa référence définitive
-// et devient figée, ce qui est la condition d'un règlement propre.
+// Marqueur relu par `invoiceService.remiseRateFromNote`. La note publique est
+// le seul endroit où Dolibarr peut porter le taux consenti — il n'a pas de
+// champ pour cela tant que la facture n'est pas encaissée — et elle sert de
+// filet si le backend SQLite est absent.
+export const noteRemise = (rate, remise, net) =>
+  `Remise de règlement : ${rate} % (− ${money(remise)} TTC) — Net à payer : ${money(net)} TTC`
+
+// Validation du panier : crée la facture **au prix plein**, ses lignes non
+// remisées, puis la valide.
+//
+// La remise n'est volontairement pas portée par les lignes. Sur une commande de
+// 1 000 TTC remisée à 30 %, un `remise_percent` sur chaque ligne donnerait une
+// facture Dolibarr de 700 : le prix réellement facturé disparaîtrait du
+// document. Dolibarr reçoit donc les 1 000, et la remise n'y entre qu'au
+// règlement, sous forme d'escompte (cf. `setInvoicePaid`). La décomposition
+// complète part en parallèle dans l'historique SQLite.
+//
 // La date de facture est saisie par le client et transmise telle quelle : on ne
 // la remplace pas par la date du jour, une commande pouvant être enregistrée
 // après coup. À défaut de saisie, on retombe sur aujourd'hui.
@@ -38,7 +59,7 @@ export async function createInvoiceFromCart({ client, items, days, date: dateInp
   if (!items.length) throw new Error('Votre panier est vide.')
 
   const delay = Math.max(0, Math.floor(Number(days) || 0))
-  const { rule, rate, totals } = await quoteFromDelay(items, delay)
+  const { rule, rate, plein, totals } = await quoteFromDelay(items, delay)
 
   const date =
     dateInput == null || dateInput === ''
@@ -48,11 +69,15 @@ export async function createInvoiceFromCart({ client, items, days, date: dateInp
         : fromInputDate(dateInput)
   if (!date) throw new Error('La date de la facture est invalide.')
 
+  const entete = comment ?? `Commande en ligne — règlement annoncé sous ${delay} jour(s)`
+
   const invoiceId = await createInvoice({
     socid: client.id,
     date,
     dateLimite: date + delay * DAY,
-    note: comment ?? `Commande en ligne — règlement annoncé sous ${delay} jour(s)`,
+    note: rate > 0
+      ? `${entete}\n${noteRemise(rate, plein.ttc - totals.ttc, totals.ttc)}`
+      : entete,
   })
 
   const lines = []
@@ -63,13 +88,31 @@ export async function createInvoiceFromCart({ client, items, days, date: dateInp
       qty: item.qty,
       subprice: item.ht,
       tva: item.tva,
-      remise: rate,
+      remise: 0,
       productId: item.productId,
     })
     lines.push({ ...item, lineId })
   }
 
-  await validateInvoice(invoiceId)
+  const validated = await validateInvoice(invoiceId)
 
-  return { invoiceId, delay, rule, rate, totals, lines, date, dueDate: date + delay * DAY }
+  // L'historique est écrit dès la création, avant tout encaissement : il porte
+  // alors le net attendu et un reste égal à ce net. Le règlement le complétera.
+  await saveHistorique(
+    buildHistorique({
+      invoiceId,
+      ref: validated?.ref ?? null,
+      socid: client.id,
+      client: client.name,
+      date,
+      montantFacture: plein.ttc,
+      taux: rate,
+      paye: 0,
+    })
+  )
+
+  return {
+    invoiceId, delay, rule, rate, plein, totals, lines, date,
+    dueDate: date + delay * DAY,
+  }
 }

@@ -1,10 +1,12 @@
-import { dolibarrList, dolibarrPost } from '../dolibarrApi'
+import { dolibarrList, dolibarrPost, dolibarrFetch } from '../dolibarrApi'
 import { syncToSQLite, isBackendUp } from '../backend'
 import { IMPORT_ORDER, IMPORT_META } from '../modulesRegistry'
 import {
-  addInvoiceLine, validateInvoice, payInvoice,
+  addInvoiceLine, validateInvoice, payInvoice, setInvoicePaid,
   resolveAccounts, resolvePaymentTypes, isCashLabel,
 } from '../invoiceOps'
+import { getRemises, findRule, daysBetween } from '../remiseService'
+import { buildHistorique, saveHistorique } from '../historiqueService'
 import { ImportRegistry } from './detectModules'
 import { parseDateDMY } from './csvUtils'
 import { parseRows } from './validateImport'
@@ -118,11 +120,17 @@ const importFactures = async (rows, registry, onProgress) => {
 
       const id = String(await dolibarrPost('/invoices', body))
 
+      // `ttc` et `paye` sont renseignés à l'étape des règlements, qui a besoin
+      // du total facturé pour asseoir la remise et du cumulé pour savoir quand
+      // le net est atteint.
       registry.set('factures', row.num_facture, {
         id,
         num_facture: row.num_facture,
         socid: tiers.id,
+        nom_client: row.nom_client ?? tiers.name ?? null,
         date: dateFacture,
+        ttc: null,
+        paye: 0,
       })
       results.stored.push({ ...row, dolibarr_id: Number(id), socid: Number(tiers.id) })
       results.success++
@@ -196,6 +204,30 @@ const importDetailFactures = async (rows, registry, onProgress) => {
 // Seule contrainte conservée : valider la facture avant de la régler, un
 // règlement devant porter sur un document figé et doté de sa référence
 // définitive.
+//
+// Le barème de remise s'applique **ici comme au front office**, et pour la même
+// raison : la remise récompense la rapidité du règlement, elle ne se connaît
+// donc qu'au moment où celui-ci est enregistré. Le délai est mesuré entre la
+// date de facture et la date de règlement portées par le CSV.
+//
+// La facture reste chez Dolibarr à son prix plein ; le règlement encaisse le
+// net remisé, et l'écart est fermé en escompte (cf. `setInvoicePaid`). Sans
+// cette symétrie, deux factures identiques réglées le même jour afficheraient
+// des montants différents selon qu'elles viennent du CSV ou du panier.
+
+const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100
+
+// Total TTC réel de la facture, lu chez Dolibarr après validation plutôt que
+// recalculé depuis le CSV : c'est ce total qui sert d'assiette à la remise, et
+// c'est celui que le tableau de bord affichera.
+const invoiceTotalTtc = async (invoiceId) => {
+  try {
+    const inv = await dolibarrFetch(`/invoices/${invoiceId}`)
+    return round2(parseFloat(inv.total_ttc) || 0)
+  } catch {
+    return 0
+  }
+}
 
 const importPaiements = async (rows, registry, onProgress) => {
   const results = { success: 0, errors: [], warnings: [], stored: [] }
@@ -203,6 +235,14 @@ const importPaiements = async (rows, registry, onProgress) => {
   const accounts = await resolveAccounts().catch(() => ({ list: [], byLabel: () => null }))
   if (accounts.list.length === 0) {
     results.warnings.push({ message: 'Aucun compte bancaire lisible — les règlements seront ignorés.' })
+  }
+
+  // Barème vide ou backend éteint : tout est réglé au prix plein, sans remise.
+  const rules = await getRemises().catch(() => [])
+  if (rules.length === 0) {
+    results.warnings.push({
+      message: 'Barème de remise illisible — les règlements sont enregistrés au prix plein.',
+    })
   }
 
   const payTypes = await resolvePaymentTypes()
@@ -252,17 +292,81 @@ const importPaiements = async (rows, registry, onProgress) => {
     }
 
     try {
+      const paidAt = parseDateDMY(row.date_reglement) ?? Math.floor(Date.now() / 1000)
+
+      // Assiette de la remise : le total TTC de la facture, lu une fois puis
+      // mémorisé — une facture peut recevoir plusieurs règlements.
+      if (facture.ttc == null) facture.ttc = await invoiceTotalTtc(facture.id)
+
+      const delay = daysBetween(facture.date, paidAt) ?? 0
+      const rule = findRule(rules, delay)
+      const rate = rule ? Number(rule.taux) : 0
+
+      const remise = round2((facture.ttc * rate) / 100)
+      const net = round2(facture.ttc - remise)
+      const dejaRegle = facture.paye ?? 0
+
+      // Un règlement ne peut pas dépasser le net remisé — même règle qu'au
+      // front office. Le montant du CSV le plafonne : il dit combien le client
+      // entendait verser, la remise dit combien il devait réellement.
+      const amount = round2(Math.min(Number(row.montant) || 0, net - dejaRegle))
+      if (amount <= 0) {
+        results.warnings.push({
+          message: `Règlement ${row.num_facture} du ${row.date_reglement} ignoré : la facture est déjà soldée (net remisé ${net}).`,
+        })
+        onProgress?.(Math.round(((i + 1) / rows.length) * 100), results)
+        continue
+      }
+
       const paiementId = await payInvoice({
         invoiceId: facture.id,
-        amount: row.montant,
-        date: parseDateDMY(row.date_reglement) ?? Math.floor(Date.now() / 1000),
+        amount,
+        date: paidAt,
         accountId: compte.id,
         paymentTypeId: isCashLabel(row.caisse) ? payTypes.cash : payTypes.bank,
-        comment: `Import CSV — ${row.num_facture}`,
+        comment: rate > 0
+          ? `Import CSV — ${row.num_facture} (remise ${rate} %)`
+          : `Import CSV — ${row.num_facture}`,
       })
+
+      const paye = round2(dejaRegle + amount)
+      facture.paye = paye
+
+      // Net atteint : l'écart avec le prix plein devient l'escompte. Son échec
+      // n'annule pas le règlement, qui est déjà écrit chez Dolibarr.
+      if (paye + 0.01 >= net && remise > 0.01) {
+        try {
+          await setInvoicePaid(
+            facture.id,
+            undefined,
+            `Remise de règlement ${rate} % — ${remise} TTC sur ${facture.ttc} facturés (délai ${delay} j)`
+          )
+        } catch (err) {
+          results.warnings.push({
+            message: `Escompte non porté sur ${row.num_facture} : ${err.message?.slice(0, 150)}`,
+          })
+        }
+      }
+
+      await saveHistorique(
+        buildHistorique({
+          invoiceId: facture.id,
+          ref: row.num_facture,
+          socid: facture.socid,
+          client: facture.nom_client ?? null,
+          date: facture.date,
+          montantFacture: facture.ttc,
+          taux: rate,
+          paye,
+          dateReglement: paidAt,
+        })
+      )
 
       results.stored.push({
         ...row,
+        // Le montant conservé est celui réellement encaissé, remise déduite :
+        // la copie locale doit refléter l'écriture, pas l'intention du CSV.
+        montant: amount,
         dolibarr_id: Number(paiementId),
         accountid: Number(compte.id),
       })

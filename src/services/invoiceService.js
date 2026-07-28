@@ -43,9 +43,33 @@ export async function getInvoicePayments(id) {
   }))
 }
 
+// Taux de remise consenti, relu dans la note publique de la facture.
+//
+// Tant que la facture n'est pas encaissée, Dolibarr ne connaît pas ce taux : la
+// facture y est au prix plein et l'escompte n'existera qu'au règlement. Le taux
+// est donc écrit dans la note à la création (cf. `orderService.noteRemise`), ce
+// qui rend la facture Dolibarr auto-suffisante — et permet à la page de
+// règlement de proposer le bon montant même sans le backend SQLite.
+export function remiseRateFromNote(note) {
+  const found = /Remise de règlement\s*:\s*([\d.,]+)\s*%/i.exec(String(note ?? ''))
+  if (!found) return 0
+  const rate = Number(found[1].replace(',', '.'))
+  return Number.isFinite(rate) && rate > 0 && rate <= 100 ? rate : 0
+}
+
 function normalizeInvoice(inv, clientName) {
   const ttc = num(inv.total_ttc)
   const paid = num(inv.totalpaid)
+  const note = inv.note_public ?? ''
+
+  // `paye` à 1 — statut 2 dans l'interface — signifie « plus rien à percevoir »,
+  // y compris quand l'encaissement est resté inférieur au total facturé. L'écart
+  // est alors la remise de règlement (escompte) consentie à l'encaissement :
+  // c'est sous cette forme que la remise vit dans Dolibarr, la facture étant
+  // émise au prix plein.
+  const closed = String(inv.paye ?? '') === '1' || String(inv.statut) === '2'
+  const remiseReglement = closed ? Math.max(0, Math.round((ttc - paid) * 100) / 100) : 0
+
   return {
     id: String(inv.id),
     ref: inv.ref,
@@ -56,12 +80,22 @@ function normalizeInvoice(inv, clientName) {
     dateLimite: inv.date_lim_reglement ? Number(inv.date_lim_reglement) : null,
     socid: String(inv.socid),
     client: clientName ?? `Tiers ${inv.socid}`,
+    note,
     ht: num(inv.total_ht),
     tva: num(inv.total_tva),
+    // Montant réellement facturé : le prix plein, remise non déduite.
     ttc,
     paid,
+    // Taux annoncé (note) tant que rien n'est encaissé ; une fois la facture
+    // close, le taux effectivement obtenu se lit sur les montants.
+    remiseRate: closed && ttc > 0
+      ? Math.round((remiseReglement / ttc) * 1000) / 10
+      : remiseRateFromNote(note),
+    remiseReglement,
     // `remaintopay` est absent sur un brouillon : on retombe sur le calcul.
-    remaining: inv.remaintopay != null ? num(inv.remaintopay) : ttc - paid,
+    // Une facture close ne laisse rien à payer, quel que soit ce que Dolibarr
+    // renvoie encore comme restant dû.
+    remaining: closed ? 0 : inv.remaintopay != null ? num(inv.remaintopay) : ttc - paid,
     lines: (inv.lines ?? []).map((l) => ({
       id: String(l.id),
       productId: l.fk_product ? String(l.fk_product) : null,
@@ -78,9 +112,33 @@ function normalizeInvoice(inv, clientName) {
   }
 }
 
-// ─── TVA d'une facture ───────────────────────────────────────────────────────
+// ─── Décomposition d'une facture émise au prix plein ─────────────────────────
 
 const round2 = (n) => Math.round(n * 100) / 100
+
+// Sépare les trois montants d'une facture remisée : ce qui est facturé, ce qui
+// est remisé, ce qui reste à verser.
+//
+// Le point délicat est la source du taux, qui change selon l'état de la facture.
+// Tant qu'elle n'est pas soldée, Dolibarr n'en sait rien — la facture y est au
+// prix plein — et le taux vient de la note, ou de `rateOverride` quand
+// l'appelant dispose de l'historique SQLite, qui fait autorité. Une fois la
+// facture close par l'escompte, la remise est inscrite dans les montants
+// eux-mêmes : c'est elle qui prime, et le taux s'en déduit.
+//
+// `netRemaining` est le montant réellement dû. C'est lui qui doit borner un
+// règlement, jamais `remaining` : celui-ci porte encore la remise.
+export function decomposeInvoice(invoice, rateOverride = null) {
+  const closed = invoice.remiseReglement > 0 || invoice.remaining <= 0.01
+
+  const rate = closed ? invoice.remiseRate : rateOverride ?? invoice.remiseRate
+  const remise = closed ? invoice.remiseReglement : round2((invoice.ttc * rate) / 100)
+  const net = round2(invoice.ttc - remise)
+
+  return { rate, remise, net, netRemaining: round2(Math.max(0, net - invoice.paid)) }
+}
+
+// ─── TVA d'une facture ───────────────────────────────────────────────────────
 
 // Le taux à retenir pour ventiler un règlement.
 //
@@ -122,9 +180,11 @@ export async function getBillingData() {
 
 // ─── État de règlement ───────────────────────────────────────────────────────
 
+// Le reste à payer est testé en premier : une facture soldée par un escompte
+// n'a plus rien à percevoir, même si l'encaissement reste inférieur au facturé.
 export function paymentState(invoice) {
-  if (invoice.paid <= 0) return { key: 'impayee', label: 'Impayée' }
   if (invoice.remaining <= 0.01) return { key: 'payee', label: 'Payée' }
+  if (invoice.paid <= 0) return { key: 'impayee', label: 'Impayée' }
   return { key: 'partielle', label: 'Partiellement réglée' }
 }
 
@@ -155,13 +215,17 @@ export function groupByMonth(invoices) {
     }
     const key = monthKey(invoice.date)
     if (!months.has(key)) {
-      months.set(key, { key, label: monthLabel(key), invoices: [], ttc: 0, paid: 0, remaining: 0 })
+      months.set(key, {
+        key, label: monthLabel(key), invoices: [],
+        ttc: 0, paid: 0, remaining: 0, remise: 0,
+      })
     }
     const bucket = months.get(key)
     bucket.invoices.push(invoice)
     bucket.ttc += invoice.ttc
     bucket.paid += invoice.paid
     bucket.remaining += invoice.remaining
+    bucket.remise += invoice.remiseReglement
   }
 
   return {
@@ -223,7 +287,8 @@ export function totals(invoices) {
       ttc: acc.ttc + inv.ttc,
       paid: acc.paid + inv.paid,
       remaining: acc.remaining + inv.remaining,
+      remise: acc.remise + inv.remiseReglement,
     }),
-    { count: 0, ht: 0, ttc: 0, paid: 0, remaining: 0 }
+    { count: 0, ht: 0, ttc: 0, paid: 0, remaining: 0, remise: 0 }
   )
 }

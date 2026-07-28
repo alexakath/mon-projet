@@ -109,6 +109,7 @@ function SQLitePage() {
                 <th>Total HT</th>
                 <th>Total TTC</th>
                 <th>Réglé</th>
+                <th>Remise règlement</th>
                 <th>Reste</th>
                 <th>Statut</th>
               </tr>
@@ -122,6 +123,11 @@ function SQLitePage() {
                   <td className="muted">{fmt(f.lignes_ht)}</td>
                   <td className="muted">{fmt(f.lignes_ttc)}</td>
                   <td className="muted">{fmt(f.regle)}</td>
+                  {/* Le reste tient compte de la remise : sans elle, une
+                      facture soldée par escompte paraîtrait impayée. */}
+                  <td className="muted">
+                    {f.remise > 0.005 ? `${fmt(f.remise)} (${f.taux_remise} %)` : '—'}
+                  </td>
                   <td className="muted">{fmt(f.reste)}</td>
                   <td>
                     <span className={`state-pill ${STATUT_PILL[f.statut]}`}>

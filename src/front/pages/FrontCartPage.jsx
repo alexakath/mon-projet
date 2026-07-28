@@ -1,14 +1,14 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { getCart, setQuantity, removeFromCart, clearCart, cartTotals } from '../../services/cartService'
-import { getRemises, findRule, sortRules, rangeLabel } from '../../services/remiseService'
-import { createInvoiceFromCart, today, toInputDate, fromInputDate } from '../../services/orderService'
+import { getRemises, findRule, sortRules } from '../../services/remiseService'
+import { createInvoiceFromCart } from '../../services/orderService'
 import './FrontPages.css'
 
 const money = (n) =>
   Number(n || 0).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
-const day = (ts) => (ts ? new Date(ts * 1000).toLocaleDateString('fr-FR') : '—')
+const day = (ts) => new Date(ts * 1000).toLocaleDateString('fr-FR')
 
 function FrontCartPage({ client, onCartChange }) {
   const navigate = useNavigate()
@@ -16,7 +16,6 @@ function FrontCartPage({ client, onCartChange }) {
   const [rules, setRules] = useState([])
   const [mode, setMode] = useState('now') // 'now' | 'later'
   const [days, setDays] = useState('7')
-  const [invoiceDate, setInvoiceDate] = useState(() => toInputDate(today()))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
 
@@ -32,21 +31,23 @@ function FrontCartPage({ client, onCartChange }) {
   const delay = mode === 'now' ? 0 : Math.max(0, Math.floor(Number(days) || 0))
   const rule = useMemo(() => findRule(rules, delay), [rules, delay])
   const rate = rule ? Number(rule.taux) : 0
+
+  // `plein` est le panier au tarif catalogue : c'est ce montant-là qui sera
+  // facturé dans Dolibarr. `totals` est le même panier remisé : c'est ce que le
+  // client versera. Les deux sont affichés, parce que les deux existent.
+  const plein = useMemo(() => cartTotals(items, 0), [items])
   const totals = useMemo(() => cartTotals(items, rate), [items, rate])
 
-  // L'échéance court à partir de la date de facture saisie, pas du jour courant.
-  const issuedAt = useMemo(() => fromInputDate(invoiceDate), [invoiceDate])
-  const dueDate = useMemo(() => (issuedAt ? issuedAt + delay * 86400 : null), [issuedAt, delay])
+  const dueDate = useMemo(() => {
+    const now = new Date()
+    return Math.floor(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate(), 12) / 1000) + delay * 86400
+  }, [delay])
 
   const submit = async () => {
-    if (!issuedAt) {
-      setError('Saisissez une date de facture valide.')
-      return
-    }
     setBusy(true)
     setError(null)
     try {
-      const order = await createInvoiceFromCart({ client, items, days: delay, date: issuedAt })
+      const order = await createInvoiceFromCart({ client, items, days: delay })
       update(clearCart(client.id))
       navigate(`/front/paiement/${order.invoiceId}`, { state: { justCreated: true } })
     } catch (err) {
@@ -91,11 +92,20 @@ function FrontCartPage({ client, onCartChange }) {
               <th className="fp-right">P.U. HT</th>
               <th className="fp-center">Quantité</th>
               <th className="fp-right">Total HT</th>
+              <th className="fp-right">Remise {rate > 0 ? `${rate} %` : ''}</th>
+              <th className="fp-right">Net HT</th>
               <th />
             </tr>
           </thead>
           <tbody>
-            {items.map((item) => (
+            {items.map((item) => {
+              // La remise se lit ligne par ligne, au même taux que le
+              // récapitulatif : elle n'est pas propre au produit, elle vient du
+              // délai de règlement choisi plus bas.
+              const brutHt = item.qty * item.ht
+              const remiseHt = (brutHt * rate) / 100
+
+              return (
               <tr key={item.productId}>
                 <td>
                   {item.ref && <span className="fp-line-ref">{item.ref}</span>}
@@ -114,7 +124,11 @@ function FrontCartPage({ client, onCartChange }) {
                     onChange={(e) => update(setQuantity(client.id, item.productId, e.target.value))}
                   />
                 </td>
-                <td className="fp-right fp-bold">{money(item.qty * item.ht)}</td>
+                <td className="fp-right fp-bold">{money(brutHt)}</td>
+                <td className="fp-right">
+                  {rate > 0 ? <span className="fp-paid">− {money(remiseHt)}</span> : '—'}
+                </td>
+                <td className="fp-right">{money(brutHt - remiseHt)}</td>
                 <td className="fp-right">
                   <button
                     className="fp-link-btn fp-link-btn--danger"
@@ -126,30 +140,10 @@ function FrontCartPage({ client, onCartChange }) {
                   </button>
                 </td>
               </tr>
-            ))}
+              )
+            })}
           </tbody>
         </table>
-      </section>
-
-      <section className="fp-block">
-        <h2 className="fp-block-title">Date de la facture</h2>
-        <div className="fp-form-grid">
-          <label className="fp-field">
-            <span className="fp-field-label">Émise le</span>
-            <input
-              type="date"
-              className="fp-input"
-              value={invoiceDate}
-              onChange={(e) => setInvoiceDate(e.target.value)}
-              disabled={busy}
-              required
-            />
-            <span className="fp-field-hint">
-              C'est cette date qui figurera sur la facture, et le point de départ de
-              l'échéance. Le règlement ne pourra pas lui être antérieur.
-            </span>
-          </label>
-        </div>
       </section>
 
       <section className="fp-block">
@@ -157,9 +151,7 @@ function FrontCartPage({ client, onCartChange }) {
         <p className="fp-hint">
           {rules.length === 0
             ? "Aucun barème de remise n'est configuré : la commande sera facturée au prix plein, quelle que soit la date choisie."
-            : rule
-              ? 'Plus le règlement est rapide, plus la remise est importante.'
-              : "Ce délai n'est couvert par aucun palier : la commande serait facturée au prix plein. Voyez le barème ci-dessous pour choisir un délai remisé."}
+            : 'Plus le règlement est rapide, plus la remise est importante.'}
         </p>
 
         <div className="fp-choices">
@@ -208,7 +200,7 @@ function FrontCartPage({ client, onCartChange }) {
               {sortRules(rules).map((r) => (
                 <li key={r.id} className={r.id === rule?.id ? 'fp-scale--active' : ''}>
                   <span>{r.libelle}</span>
-                  <span>{rangeLabel(r)}</span>
+                  <span>{r.jours_max === null ? 'au-delà' : `${r.jours_max} j`}</span>
                   <span className="fp-bold">{r.taux} %</span>
                 </li>
               ))}
@@ -222,35 +214,33 @@ function FrontCartPage({ client, onCartChange }) {
 
         <div className="fp-recap-row">
           <span>Total HT</span>
-          <span>{money(totals.brutHt)}</span>
-        </div>
-        {/* Sans palier, la remise est nulle — mais pour une raison différente
-            d'un palier à 0 % : le délai choisi n'est couvert par aucun palier.
-            Les deux cas donnaient le même tiret muet ; on les distingue, sinon
-            le client ne peut pas savoir qu'un autre délai le servirait mieux. */}
-        <div className="fp-recap-row">
-          <span>
-            Remise {rate > 0 ? `${rate} %` : ''}
-            {rule ? (
-              <span className="fp-recap-rule"> — {rule.libelle}</span>
-            ) : (
-              rules.length > 0 && (
-                <span className="fp-recap-rule"> — aucun palier pour ce délai</span>
-              )
-            )}
-          </span>
-          <span className={rate > 0 ? 'fp-paid' : ''}>
-            {rate > 0 ? `− ${money(totals.remise)}` : '—'}
-          </span>
-        </div>
-        <div className="fp-recap-row">
-          <span>Net HT</span>
-          <span>{money(totals.ht)}</span>
+          <span>{money(plein.brutHt)}</span>
         </div>
         <div className="fp-recap-row">
           <span>TVA</span>
-          <span>{money(totals.tva)}</span>
+          <span>{money(plein.tva)}</span>
         </div>
+
+        {/* Le montant qui sera porté sur la facture Dolibarr : le prix plein.
+            La remise n'y entrera qu'au règlement, en escompte. */}
+        <div className="fp-recap-row">
+          <span>
+            Montant facturé TTC
+            <span className="fp-recap-rule"> — montant porté sur votre facture</span>
+          </span>
+          <span>{money(plein.ttc)}</span>
+        </div>
+
+        <div className="fp-recap-row">
+          <span>
+            Remise de règlement {rate > 0 ? `${rate} %` : ''}
+            {rule && <span className="fp-recap-rule"> — {rule.libelle}</span>}
+          </span>
+          <span className={rate > 0 ? 'fp-paid' : ''}>
+            {rate > 0 ? `− ${money(plein.ttc - totals.ttc)}` : '—'}
+          </span>
+        </div>
+
         <div className="fp-recap-row fp-recap-row--total">
           <span>Net à payer TTC</span>
           <span>{money(totals.ttc)}</span>
@@ -262,7 +252,10 @@ function FrontCartPage({ client, onCartChange }) {
           {busy ? 'Création de la facture…' : 'Valider et créer ma facture'}
         </button>
         <p className="fp-hint">
-          La facture sera émise à votre nom, puis vous pourrez enregistrer votre règlement.
+          La facture sera émise à votre nom pour {money(plein.ttc)} TTC, le prix plein.
+          {rate > 0
+            ? ` La remise de ${rate} % vous sera accordée à l'encaissement : vous ne réglerez que ${money(totals.ttc)}.`
+            : ''}
         </p>
       </section>
     </div>

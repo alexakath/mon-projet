@@ -283,6 +283,64 @@ const MODULES = {
     }),
   },
 
+  // ── Historique des règlements remisés ──────────────────────────────────────
+  //
+  // Dolibarr porte désormais la facture **au prix plein** : ses lignes ne sont
+  // plus remisées, et la remise n'apparaît qu'à l'encaissement, quand la
+  // facture est classée « payée » sur un montant inférieur au total facturé —
+  // l'escompte de règlement. Dolibarr garde ainsi le montant réel de la
+  // facture, mais il ne garde pas la décomposition qui y a mené : le taux
+  // consenti, la remise en valeur, le net attendu.
+  //
+  // Cette table la conserve, ligne par facture : 1000 facturés, 30 %, 300 de
+  // remise, 700 encaissés, 0 restant. C'est l'historique de ce qui a été
+  // réellement payé, indépendant de Dolibarr et rejouable sans lui.
+
+  historique_remises: {
+    label: 'Historique des règlements remisés',
+    color: '#0ea5e9',
+    resetNote: "Vide l'historique des règlements remisés (ne touche pas Dolibarr)",
+    orderBy: 'id DESC',
+    schema: `
+      CREATE TABLE IF NOT EXISTS historique_remises (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        dolibarr_id      INTEGER NOT NULL UNIQUE,
+        facture_ref      TEXT,
+        socid            INTEGER,
+        nom_client       TEXT,
+        date_facture     TEXT,
+        montant_facture  REAL DEFAULT 0,
+        taux_remise      REAL DEFAULT 0,
+        remise_reglement REAL DEFAULT 0,
+        net_a_payer      REAL DEFAULT 0,
+        paye_reel        REAL DEFAULT 0,
+        reste_a_payer    REAL DEFAULT 0,
+        date_reglement   TEXT,
+        imported_at      TEXT DEFAULT (datetime('now'))
+      )
+    `,
+    columns: [
+      'dolibarr_id', 'facture_ref', 'socid', 'nom_client', 'date_facture',
+      'montant_facture', 'taux_remise', 'remise_reglement', 'net_a_payer',
+      'paye_reel', 'reste_a_payer', 'date_reglement',
+    ],
+    conflictKey: 'dolibarr_id',
+    mapRow: (h) => ({
+      dolibarr_id: Number(h.dolibarr_id),
+      facture_ref: h.facture_ref ?? null,
+      socid: h.socid != null ? Number(h.socid) : null,
+      nom_client: h.nom_client ?? null,
+      date_facture: h.date_facture ?? null,
+      montant_facture: Number(h.montant_facture) || 0,
+      taux_remise: Number(h.taux_remise) || 0,
+      remise_reglement: Number(h.remise_reglement) || 0,
+      net_a_payer: Number(h.net_a_payer) || 0,
+      paye_reel: Number(h.paye_reel) || 0,
+      reste_a_payer: Number(h.reste_a_payer) || 0,
+      date_reglement: h.date_reglement ?? null,
+    }),
+  },
+
   // ── Miroir local de Dolibarr ───────────────────────────────────────────────
 
   tiers: {

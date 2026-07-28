@@ -102,9 +102,10 @@ src/
     ├── clientAuthService.js session client + auto-inscription
     ├── productService.js    catalogue produits
     ├── cartService.js       panier (sessionStorage par client)
-    ├── orderService.js      validation du panier -> facture remisée
+    ├── orderService.js      validation du panier -> facture au prix plein
     ├── invoiceOps.js        écritures Dolibarr partagées import / panier
     ├── remiseService.js     barème de remise + application
+    ├── historiqueService.js historique SQLite des règlements remisés
     ├── invoiceService.js    facturation + agrégats mois / produits
     ├── resetService.js      réinitialisation Dolibarr + SQLite
     ├── userService.js       exemple de service module
@@ -155,10 +156,47 @@ Dolibarr tant qu'il n'est pas validé, il n'existe donc pas d'objet « panier »
 côté serveur. Ajouter deux fois le même produit incrémente sa quantité au lieu
 de créer une seconde ligne, et passer une quantité à zéro retire la ligne.
 
-À la validation, l'application crée la facture au nom du client, ajoute chaque
-ligne avec `remise_percent` égal au taux retenu, puis **valide la facture** — la
-validation remplace la référence provisoire `(PROVxx)` par la définitive et fige
-le document. Le client arrive ensuite sur la page de règlement.
+À la validation, l'application crée la facture au nom du client **au prix
+plein** — chaque ligne au tarif catalogue, sans `remise_percent` —, puis
+**valide la facture** : la validation remplace la référence provisoire
+`(PROVxx)` par la définitive et fige le document. Le client arrive ensuite sur
+la page de règlement.
+
+### Où vit la remise
+
+C'est le point qui demande le plus d'attention, parce que la remise change
+d'endroit selon le moment.
+
+Une commande de 1 000 TTC remisée à 30 % **entre dans Dolibarr pour 1 000**. La
+remise n'est pas portée par les lignes : un `remise_percent` sur chacune
+donnerait une facture de 700, et le montant réellement facturé disparaîtrait du
+document. Or c'est lui qu'on veut y lire.
+
+La remise n'entre dans Dolibarr qu'**au règlement**, sous la forme que Dolibarr
+prévoit pour cela : le client verse les 700, puis la facture est classée
+« payée » avec le motif `discount_vat` — l'**escompte de règlement**
+(`POST /invoices/{id}/settopaid`, cf. `invoiceOps.setInvoicePaid`). Dolibarr
+conserve alors les trois montants séparément : 1 000 facturés, 700 encaissés,
+300 abandonnés en escompte, 0 restant.
+
+Entre les deux, Dolibarr ne connaît pas encore le taux consenti — il n'a pas de
+champ pour cela tant que rien n'est encaissé. Il est donc écrit à deux endroits :
+
+- dans la **note publique** de la facture, sous une forme relue par
+  `invoiceService.remiseRateFromNote` — ce qui rend la facture Dolibarr
+  auto-suffisante ;
+- dans la table SQLite **`historique_remises`**, écrite dès la commande puis
+  complétée au règlement : montant facturé, taux, remise, net, encaissé, reste.
+  C'est l'historique de ce qui a réellement été payé, et il fait autorité sur le
+  taux quand le backend est joignable.
+
+`invoiceService.decomposeInvoice()` rassemble les deux sources et rend les trois
+montants. **`netRemaining` est ce que le client doit réellement** : c'est lui qui
+borne un règlement, jamais `remaining`, qui porte encore la remise.
+
+Le tableau de bord affiche ces trois montants — *Montant facture réel*,
+*Remise règlement*, *Reste à payer* — par mois, par facture, et dans la section
+« Historique des règlements remisés » alimentée par SQLite.
 
 Une facture arrivée **en brouillon** (celles de l'import CSV, par exemple) reste
 accessible depuis « Mes factures » : la page de règlement propose alors une
@@ -171,10 +209,16 @@ première étape de validation, puis le formulaire de règlement.
 > comptable.
 
 Cette page reprend les champs de la saisie règlement de Dolibarr : date,
-mode de règlement, compte à créditer et montant, pré-rempli avec le reste à
-payer. Un montant inférieur est accepté — la facture reste alors partiellement
-réglée, et se solde au règlement suivant. Un montant supérieur au restant dû est
-refusé avant l'envoi.
+mode de règlement, compte à créditer et montant, pré-rempli avec le **net
+restant, remise déduite** — 700 sur une facture de 1 000 remisée à 30 %, et non
+le restant dû de Dolibarr, qui vaut encore 1 000. Un montant inférieur est
+accepté — la facture reste alors partiellement réglée, et se solde au règlement
+suivant. Un montant supérieur à ce net est refusé avant l'envoi : au-delà, le
+client paierait une remise qui lui a été accordée.
+
+Si la clôture en escompte échoue alors que le règlement est déjà enregistré,
+elle est signalée comme telle et le règlement n'est **pas** rejoué : la facture
+reste ouverte pour le montant de la remise, à solder depuis Dolibarr.
 
 ### Champ TVA
 

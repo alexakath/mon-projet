@@ -126,3 +126,22 @@ export const payInvoice = ({ invoiceId, amount, date, accountId, paymentTypeId, 
     accountid: String(accountId),
     comment: comment ?? '',
   }).then(String)
+
+// Classe une facture « payée » alors que l'encaissement est inférieur au total
+// facturé : l'écart est abandonné pour le motif porté par `close_code`.
+//
+// C'est le mécanisme par lequel la remise entre dans Dolibarr. La facture y est
+// émise au prix plein — 1 000 TTC restent 1 000 TTC sur le document — puis le
+// client règle le net convenu, et le solde est fermé en **escompte de
+// règlement** (`discount_vat`, « Escompte » dans l'interface). Dolibarr
+// conserve donc les trois montants séparément : facturé, encaissé, remisé.
+//
+// L'alternative — remiser les lignes à la création — donnerait une facture de
+// 700 et perdrait le prix plein, qui est justement ce qu'on veut y voir.
+export const CLOSE_CODE_ESCOMPTE = 'discount_vat'
+
+export const setInvoicePaid = (invoiceId, closeCode = CLOSE_CODE_ESCOMPTE, closeNote = '') =>
+  dolibarrPost(`/invoices/${invoiceId}/settopaid`, {
+    close_code: closeCode,
+    close_note: closeNote,
+  })

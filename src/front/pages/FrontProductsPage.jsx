@@ -44,6 +44,10 @@ function FrontProductsPage({ client, onCartChange }) {
         <div>
           <p className="fp-eyebrow">Catalogue</p>
           <h1 className="fp-title fp-title--sm">Nos produits</h1>
+          <p className="fp-hint">
+            Prix maximum TTC, avant remise. Le taux accordé se décide au panier,
+            selon le délai de règlement que vous choisirez.
+          </p>
         </div>
         <input
           type="search"
@@ -70,9 +74,13 @@ function FrontProductsPage({ client, onCartChange }) {
               <div className="fp-product-name">{p.label}</div>
               {p.description && <p className="fp-product-desc">{p.description}</p>}
 
+              {/* Prix plein, taxes comprises : c'est le maximum que le produit
+                  puisse coûter, et le montant qui sera porté sur la facture.
+                  La remise, elle, dépend du délai de règlement choisi au panier
+                  et ne se connaît donc pas ici. */}
               <div className="fp-product-price">
                 <span className="fp-price-ttc">{money(p.ttc)}</span>
-                <span className="fp-price-unit">TTC</span>
+                <span className="fp-price-unit">TTC max</span>
               </div>
 
               <div className="fp-product-detail">
@@ -106,5 +114,4 @@ function FrontProductsPage({ client, onCartChange }) {
     </div>
   )
 }
-
 export default FrontProductsPage

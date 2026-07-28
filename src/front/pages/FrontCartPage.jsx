@@ -92,18 +92,23 @@ function FrontCartPage({ client, onCartChange }) {
               <th className="fp-right">P.U. HT</th>
               <th className="fp-center">Quantité</th>
               <th className="fp-right">Total HT</th>
-              <th className="fp-right">Remise {rate > 0 ? `${rate} %` : ''}</th>
+              <th className="fp-right">Remise produit</th>
+              <th className="fp-right">Facturé HT</th>
+              <th className="fp-right">Remise règlement {rate > 0 ? `${rate} %` : ''}</th>
               <th className="fp-right">Net HT</th>
               <th />
             </tr>
           </thead>
           <tbody>
             {items.map((item) => {
-              // La remise se lit ligne par ligne, au même taux que le
-              // récapitulatif : elle n'est pas propre au produit, elle vient du
-              // délai de règlement choisi plus bas.
+              // Les deux remises en cascade, dans l'ordre : celle de l'article
+              // (relevée à l'import) réduit le montant facturé ; celle du
+              // barème s'applique ensuite, sur ce qu'il en reste.
               const brutHt = item.qty * item.ht
-              const remiseHt = (brutHt * rate) / 100
+              const tauxProduit = Number(item.remiseImport) || 0
+              const remiseProduit = (brutHt * tauxProduit) / 100
+              const factureHt = brutHt - remiseProduit
+              const remiseHt = (factureHt * rate) / 100
 
               return (
               <tr key={item.productId}>
@@ -126,9 +131,15 @@ function FrontCartPage({ client, onCartChange }) {
                 </td>
                 <td className="fp-right fp-bold">{money(brutHt)}</td>
                 <td className="fp-right">
+                  {tauxProduit > 0
+                    ? <span className="fp-paid">− {money(remiseProduit)} ({tauxProduit} %)</span>
+                    : '—'}
+                </td>
+                <td className="fp-right">{money(factureHt)}</td>
+                <td className="fp-right">
                   {rate > 0 ? <span className="fp-paid">− {money(remiseHt)}</span> : '—'}
                 </td>
-                <td className="fp-right">{money(brutHt - remiseHt)}</td>
+                <td className="fp-right">{money(factureHt - remiseHt)}</td>
                 <td className="fp-right">
                   <button
                     className="fp-link-btn fp-link-btn--danger"
@@ -213,9 +224,28 @@ function FrontCartPage({ client, onCartChange }) {
         <h2 className="fp-block-title">Récapitulatif</h2>
 
         <div className="fp-recap-row">
-          <span>Total HT</span>
+          <span>Total HT catalogue</span>
           <span>{money(plein.brutHt)}</span>
         </div>
+
+        {/* Remise 1 sur 2 : celle de l'article. Elle réduit le montant
+            facturé, contrairement à celle du barème plus bas. */}
+        {plein.remiseImport > 0 && (
+          <>
+            <div className="fp-recap-row">
+              <span>
+                Remise produit
+                <span className="fp-recap-rule"> — tarif consenti sur l'article</span>
+              </span>
+              <span className="fp-paid">− {money(plein.remiseImport)}</span>
+            </div>
+            <div className="fp-recap-row">
+              <span>Net HT</span>
+              <span>{money(plein.factureHt)}</span>
+            </div>
+          </>
+        )}
+
         <div className="fp-recap-row">
           <span>TVA</span>
           <span>{money(plein.tva)}</span>
@@ -252,9 +282,10 @@ function FrontCartPage({ client, onCartChange }) {
           {busy ? 'Création de la facture…' : 'Valider et créer ma facture'}
         </button>
         <p className="fp-hint">
-          La facture sera émise à votre nom pour {money(plein.ttc)} TTC, le prix plein.
+          La facture sera émise à votre nom pour {money(plein.ttc)} TTC
+          {plein.remiseImport > 0 ? ', remise produit déduite' : ', le prix plein'}.
           {rate > 0
-            ? ` La remise de ${rate} % vous sera accordée à l'encaissement : vous ne réglerez que ${money(totals.ttc)}.`
+            ? ` La remise de règlement de ${rate} % vous sera accordée à l'encaissement : vous ne réglerez que ${money(totals.ttc)}.`
             : ''}
         </p>
       </section>

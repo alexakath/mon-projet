@@ -87,6 +87,14 @@ function FrontProductsPage({ client, onCartChange }) {
                 {money(p.ht)} HT · TVA {p.tva} %
               </div>
 
+              {/* Remise commerciale relevée à l'import : elle est acquise dès
+                  l'ajout au panier, contrairement à celle du barème. */}
+              {p.remiseImport > 0 && (
+                <div className="fp-product-detail fp-paid">
+                  Remise produit {p.remiseImport} % · facturé {money(p.ttcRemise)} TTC
+                </div>
+              )}
+
               <button
                 className={`fp-add${added === p.id ? ' fp-add--done' : ''}`}
                 onClick={() => add(p)}

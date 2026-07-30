@@ -335,6 +335,29 @@
   text-align: center;
 }
 
+/* ── Choix de variante (plusieurs tarifs importés) ─────────────────── */
+
+.fp-variant-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-top: 0.35rem;
+  padding-top: 0.35rem;
+  border-top: 1px dashed var(--c-border-soft);
+}
+
+.fp-variant-option {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+  color: var(--c-text-sec);
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+
+.fp-variant-option input { accent-color: var(--c-accent); }
+
 /* ── Lignes de facture ──────────────────────── */
 
 .fp-lines {

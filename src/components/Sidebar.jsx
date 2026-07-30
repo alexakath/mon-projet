@@ -7,7 +7,11 @@ import './Sidebar.css'
 const HEAD_GROUPS = [
   {
     module: "Vue d'ensemble",
-    items: [{ key: 'dashboard', route: '/dashboard', label: 'Tableau de bord', icon: 'dashboard', end: true }],
+    items: [
+      { key: 'dashboard', route: '/dashboard', label: 'Tableau de bord', icon: 'dashboard', end: true },
+      { key: 'impayees', route: '/impayees', label: 'Factures non payées', icon: 'invoice' },
+      { key: 'generer', route: '/generer', label: 'Générer un paiement', icon: 'money' },
+    ],
   },
 ]
 

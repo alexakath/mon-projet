@@ -77,7 +77,7 @@ const MODULES = {
       { libelle: 'Règlement immédiat', jours_min: 0, jours_max: 0, taux: 30 },
       { libelle: '7 jours ou moins', jours_min: 1, jours_max: 7, taux: 20 },
       { libelle: '15 jours ou moins', jours_min: 8, jours_max: 15, taux: 15 },
-      { libelle: '30 jours ou moins', jours_min: 16, jours_max: 30, taux: 10 },
+      { libelle: '30 jours ou moins', jours_min: 16, jours_max: 30, taux: 7.5 },
       { libelle: 'Au-delà de 30 jours', jours_min: 31, jours_max: null, taux: 0 },
     ],
     validate: (row) => {
@@ -320,14 +320,38 @@ const MODULES = {
         net_a_payer      REAL DEFAULT 0,
         paye_reel        REAL DEFAULT 0,
         reste_a_payer    REAL DEFAULT 0,
+        montant_impute   REAL DEFAULT 0,
+        surplus          REAL DEFAULT 0,
         date_reglement   TEXT,
         imported_at      TEXT DEFAULT (datetime('now'))
       )
     `,
+    // `CREATE TABLE IF NOT EXISTS` ne rattrape pas une table déjà créée sans
+    // ces colonnes : elles arrivent avec le suivi règlement par règlement.
+    migrate: (db) => {
+      const columns = db.prepare('PRAGMA table_info(historique_remises)').all().map((c) => c.name)
+
+      if (!columns.includes('montant_impute')) {
+        db.exec('ALTER TABLE historique_remises ADD COLUMN montant_impute REAL DEFAULT 0')
+        // Avant, un taux unique valait pour toute la facture : la dette éteinte
+        // se retrouve en remontant du versé par la division inverse.
+        db.exec(`
+          UPDATE historique_remises
+             SET montant_impute = CASE
+               WHEN taux_remise >= 100 THEN paye_reel
+               ELSE ROUND(paye_reel / (1 - taux_remise / 100.0), 2)
+             END
+        `)
+      }
+
+      if (!columns.includes('surplus')) {
+        db.exec('ALTER TABLE historique_remises ADD COLUMN surplus REAL DEFAULT 0')
+      }
+    },
     columns: [
       'dolibarr_id', 'facture_ref', 'socid', 'nom_client', 'date_facture',
       'montant_facture', 'taux_remise', 'remise_reglement', 'net_a_payer',
-      'paye_reel', 'reste_a_payer', 'date_reglement',
+      'montant_impute', 'paye_reel', 'reste_a_payer', 'surplus', 'date_reglement',
     ],
     conflictKey: 'dolibarr_id',
     mapRow: (h) => ({
@@ -340,8 +364,10 @@ const MODULES = {
       taux_remise: Number(h.taux_remise) || 0,
       remise_reglement: Number(h.remise_reglement) || 0,
       net_a_payer: Number(h.net_a_payer) || 0,
+      montant_impute: Number(h.montant_impute) || 0,
       paye_reel: Number(h.paye_reel) || 0,
       reste_a_payer: Number(h.reste_a_payer) || 0,
+      surplus: Number(h.surplus) || 0,
       date_reglement: h.date_reglement ?? null,
     }),
   },

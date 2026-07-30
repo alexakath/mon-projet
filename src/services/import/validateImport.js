@@ -1,6 +1,8 @@
 import { CANONICAL, IMPORT_MODULES, IMPORT_DEPS, IMPORT_META } from '../modulesRegistry'
 import { normalize } from './detectModules'
-import { getCi, parseCsvFloat, parsePercent, parseDateDMY, computeLineTotals } from './csvUtils'
+import {
+  getCi, getCiDecimal, parseCsvFloat, parsePercent, parseDateDMY, computeLineTotals,
+} from './csvUtils'
 
 // Vérifie que les colonnes obligatoires du sous-module sont présentes.
 export const validateHeaders = (moduleKey, headers) => {
@@ -46,7 +48,9 @@ const rowParsers = {
     num_facture: getCi(row, 'num_facture'),
     date_reglement: getCi(row, 'date_reglement'),
     caisse: getCi(row, 'caisse'),
-    montant: parseCsvFloat(getCi(row, 'montant')),
+    // Dernière colonne du fichier : « 1622,4 » y arrive coupé en deux
+    // (cf. getCiDecimal). Le montant se lit donc autrement que les autres.
+    montant: parseCsvFloat(getCiDecimal(row, 'montant')),
   }),
 }
 
@@ -170,11 +174,14 @@ export const validatePlan = (plan) => {
     }
   })
 
+  // Le trop-perçu n'est pas une anomalie de fichier : il est enregistré tel
+  // quel en base locale à l'import. L'avertissement dit ce qui va se passer, il
+  // ne bloque rien.
   Object.entries(totauxParFacture).forEach(([num, t]) => {
     if (t.regle > t.ttc + EPSILON) {
       warnings.push({
         module: 'paiements',
-        message: `Facture ${num} : réglée ${t.regle.toFixed(2)} pour un TTC de ${t.ttc.toFixed(2)} (trop-perçu).`,
+        message: `Facture ${num} : réglée ${t.regle.toFixed(2)} pour un TTC de ${t.ttc.toFixed(2)} — le trop-perçu de ${(t.regle - t.ttc).toFixed(2)} sera enregistré en base locale, sans être envoyé à Dolibarr.`,
       })
     }
   })

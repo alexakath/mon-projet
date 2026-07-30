@@ -3,7 +3,7 @@ import { useNavigate, Link } from 'react-router-dom'
 import {
   getCart, setQuantity, removeFromCart, clearCart, cartTotals, remiseImportTotal,
 } from '../../services/cartService'
-import { getRemises, findRule, sortRules } from '../../services/remiseService'
+import { getRemises, findRule, sortRules, rangeLabel } from '../../services/remiseService'
 import { createInvoiceFromCart } from '../../services/orderService'
 import './FrontPages.css'
 
@@ -158,51 +158,49 @@ function FrontCartPage({ client, onCartChange }) {
       </section>
 
       <section className="fp-block">
-        <h2 className="fp-block-title">Quand souhaitez-vous régler ?</h2>
+        <h2 className="fp-block-title">Quand réglerez-vous ?</h2>
         <p className="fp-hint">
-          {rules.length === 0
-            ? "Aucun barème de remise n'est configuré : la commande sera facturée au prix plein, quelle que soit la date choisie."
-            : 'Plus le règlement est rapide, plus la remise est importante.'}
+          Ce choix ne fige rien : le taux retenu sera celui du barème à la date
+          réelle de votre règlement. Il sert ici à estimer ce que vous verserez.
         </p>
 
-        <div className="fp-choices">
-          <label className={`fp-choice${mode === 'now' ? ' fp-choice--on' : ''}`}>
-            <input
-              type="radio"
-              name="paydate"
-              checked={mode === 'now'}
-              onChange={() => setMode('now')}
+        <div className="fp-form-grid">
+          <label className="fp-field">
+            <span className="fp-field-label">Échéance envisagée</span>
+            <select
+              className="fp-input"
+              value={mode}
+              onChange={(e) => setMode(e.target.value)}
               disabled={busy}
-            />
-            <span className="fp-choice-title">Maintenant</span>
-            <span className="fp-choice-sub">Règlement le jour même</span>
+            >
+              <option value="now">Immédiatement</option>
+              <option value="later">Dans un nombre de jours</option>
+            </select>
           </label>
 
-          <label className={`fp-choice${mode === 'later' ? ' fp-choice--on' : ''}`}>
-            <input
-              type="radio"
-              name="paydate"
-              checked={mode === 'later'}
-              onChange={() => setMode('later')}
-              disabled={busy}
-            />
-            <span className="fp-choice-title">Dans</span>
-            <span className="fp-choice-days">
+          {mode === 'later' && (
+            <label className="fp-field">
+              <span className="fp-field-label">Sous combien de jours</span>
               <input
                 type="number"
-                min="1"
+                min="0"
                 step="1"
-                className="fp-qty fp-qty--days"
+                className="fp-input"
                 value={days}
-                onFocus={() => setMode('later')}
                 onChange={(e) => setDays(e.target.value)}
                 disabled={busy}
               />
-              jours
-            </span>
-            <span className="fp-choice-sub">Échéance au {day(dueDate)}</span>
-          </label>
+              <span className="fp-field-hint">Échéance au {day(dueDate)}.</span>
+            </label>
+          )}
         </div>
+
+        {rules.length > 0 && !rule && (
+          <p className="fp-hint">
+            Aucun palier ne couvre {delay} jour(s) : aucune remise ne s'appliquerait
+            à cette date.
+          </p>
+        )}
 
         {rules.length > 0 && (
           <details className="fp-scale">
@@ -211,7 +209,10 @@ function FrontCartPage({ client, onCartChange }) {
               {sortRules(rules).map((r) => (
                 <li key={r.id} className={r.id === rule?.id ? 'fp-scale--active' : ''}>
                   <span>{r.libelle}</span>
-                  <span>{r.jours_max === null ? 'au-delà' : `${r.jours_max} j`}</span>
+                  {/* Les deux bornes, pas la seule borne haute : un palier
+                      « 8 à 15 j » affiché « 15 j » se lit comme « jusqu'à 15 »
+                      et laisse croire à une remise que le barème ne donne pas. */}
+                  <span>{rangeLabel(r)}</span>
                   <span className="fp-bold">{r.taux} %</span>
                 </li>
               ))}
@@ -244,8 +245,8 @@ function FrontCartPage({ client, onCartChange }) {
 
         <div className="fp-recap-row">
           <span>
-            Remise de règlement {rate > 0 ? `${rate} %` : ''}
-            {rule && <span className="fp-recap-rule"> — {rule.libelle}</span>}
+            Remise estimée {rate > 0 ? `${rate} %` : ''}
+            {rule && <span className="fp-recap-rule"> — {rule.libelle} ({rangeLabel(rule)})</span>}
           </span>
           <span className={rate > 0 ? 'fp-paid' : ''}>
             {rate > 0 ? `− ${money(plein.ttc - totals.ttc)}` : '—'}
@@ -253,7 +254,7 @@ function FrontCartPage({ client, onCartChange }) {
         </div>
 
         <div className="fp-recap-row fp-recap-row--total">
-          <span>Net à payer TTC</span>
+          <span>Net estimé TTC</span>
           <span>{money(totals.ttc)}</span>
         </div>
 
@@ -265,7 +266,7 @@ function FrontCartPage({ client, onCartChange }) {
         <p className="fp-hint">
           La facture sera émise à votre nom pour {money(plein.ttc)} TTC, le prix catalogue.
           {rate > 0
-            ? ` La remise de règlement de ${rate} % vous sera accordée à l'encaissement : vous ne réglerez que ${money(totals.ttc)}.`
+            ? ` En réglant sous ${delay} jour(s) vous obtiendriez ${rate} % de remise et ne verseriez que ${money(totals.ttc)}. Un règlement plus tardif relèvera d'un autre palier.`
             : ''}
           {remiseProduit > 0
             ? ` À titre indicatif, ces articles ont déjà été facturés avec une remise produit (${money(remiseProduit)} HT) sur une commande passée ; elle n'est pas reconduite ici.`

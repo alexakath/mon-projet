@@ -35,12 +35,17 @@ export async function quoteFromDelay(items, days) {
   return { rules, rule, rate, plein: cartTotals(items, 0), totals: cartTotals(items, rate) }
 }
 
-// Marqueur relu par `invoiceService.remiseRateFromNote`. La note publique est
-// le seul endroit où Dolibarr peut porter le taux consenti — il n'a pas de
-// champ pour cela tant que la facture n'est pas encaissée — et elle sert de
-// filet si le backend SQLite est absent.
-export const noteRemise = (rate, remise, net) =>
-  `Remise de règlement : ${rate} % (− ${money(remise)} TTC) — Net à payer : ${money(net)} TTC`
+// Note publique de la facture. Elle n'engage plus le taux : celui-ci ne sera
+// connu qu'au règlement, et un versement plus tardif que prévu relèvera d'un
+// autre palier. Elle dit donc l'estimation, et sous quelle condition elle tient.
+//
+// Le libellé change volontairement de « Remise de règlement » à « Remise
+// estimée » : `invoiceService.remiseRateFromNote` cherche le premier, ne le
+// trouve plus, et laisse la facture à son prix plein — ce qu'elle est.
+export const noteRemise = (rate, remise, net, delay) =>
+  `Remise estimée : ${rate} % (− ${money(remise)} TTC) — net estimé ${money(net)} TTC ` +
+  `si le règlement intervient sous ${delay} jour(s). Le taux retenu sera celui du ` +
+  `barème à la date de chaque règlement.`
 
 // Validation du panier : crée la facture **au prix plein**, ses lignes non
 // remisées, puis la valide.
@@ -76,7 +81,7 @@ export async function createInvoiceFromCart({ client, items, days, date: dateInp
     date,
     dateLimite: date + delay * DAY,
     note: rate > 0
-      ? `${entete}\n${noteRemise(rate, plein.ttc - totals.ttc, totals.ttc)}`
+      ? `${entete}\n${noteRemise(rate, plein.ttc - totals.ttc, totals.ttc, delay)}`
       : entete,
   })
 
@@ -100,8 +105,10 @@ export async function createInvoiceFromCart({ client, items, days, date: dateInp
 
   const validated = await validateInvoice(invoiceId)
 
-  // L'historique est écrit dès la création, avant tout encaissement : il porte
-  // alors le net attendu et un reste égal à ce net. Le règlement le complétera.
+  // L'historique est écrit dès la création, avant tout encaissement : rien n'y
+  // est encore imputé et aucun taux n'y figure. Le taux ne se décidera qu'au
+  // règlement, d'après sa date — deux règlements pourront en porter deux
+  // différents. Chaque encaissement complétera cette ligne.
   await saveHistorique(
     buildHistorique({
       invoiceId,
@@ -110,8 +117,6 @@ export async function createInvoiceFromCart({ client, items, days, date: dateInp
       client: client.name,
       date,
       montantFacture: plein.ttc,
-      taux: rate,
-      paye: 0,
     })
   )
 

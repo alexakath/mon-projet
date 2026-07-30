@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { Link } from 'react-router-dom'
-import { getBillingData, paymentState, decomposeInvoice } from '../../services/invoiceService'
+import { getBillingData, paymentState } from '../../services/invoiceService'
+import { getHistoriqueByInvoice } from '../../services/historiqueService'
 import './FrontPages.css'
 
 const money = (n) =>
@@ -14,8 +15,29 @@ const STATE_PILL = {
   impayee: 'state-pill--draft',
 }
 
+// Ce que le client doit encore : le prix plein moins la dette déjà éteinte.
+// La somme versée ne suffit pas — une remise éteint de la dette sans être
+// encaissée — et c'est SQLite qui garde la trace de l'imputation.
+const resteDette = (inv, histo) => {
+  const row = histo.get(inv.id)
+  const impute = row ? Number(row.montant_impute) || 0 : inv.paid
+  return Math.max(0, Math.round((inv.ttc - impute) * 100) / 100)
+}
+
+// Le taux affiché doit être celui du palier réellement appliqué, pas
+// remise/facturé : sur plusieurs règlements à des taux différents, ce rapport
+// retombe sur une moyenne qui n'est nulle part dans le barème (cf.
+// historiqueService.buildHistorique). L'historique porte le taux exact ; sans
+// lui, on retombe sur l'approximation de invoiceService.
+const remiseInfo = (inv, histo) => {
+  const row = histo.get(inv.id)
+  if (row) return { amount: Number(row.remise_reglement) || 0, rate: Number(row.taux_remise) || 0 }
+  return { amount: inv.remiseReglement, rate: inv.remiseRate }
+}
+
 function FrontInvoicesPage({ client }) {
   const [invoices, setInvoices] = useState([])
+  const [histo, setHisto] = useState(new Map())
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
@@ -25,13 +47,15 @@ function FrontInvoicesPage({ client }) {
       .then((all) => setInvoices(all.filter((inv) => inv.socid === client.id)))
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false))
+
+    // Le backend reste optionnel : sans lui la liste retombe sur l'encaissé,
+    // ce qui est exact tant qu'aucune remise n'est intervenue.
+    getHistoriqueByInvoice().then(setHisto).catch(() => setHisto(new Map()))
   }, [client.id])
 
-  // Ce que le client doit réellement : la somme des nets remisés, pas celle des
-  // restants dus de Dolibarr, qui portent encore le prix plein.
   const reste = useMemo(
-    () => invoices.reduce((sum, inv) => sum + decomposeInvoice(inv).netRemaining, 0),
-    [invoices]
+    () => invoices.reduce((sum, inv) => sum + resteDette(inv, histo), 0),
+    [invoices, histo]
   )
 
   if (loading) return <div className="fp-state">Chargement de vos factures...</div>
@@ -55,12 +79,13 @@ function FrontInvoicesPage({ client }) {
         <ul className="fp-cards">
           {invoices.map((inv) => {
             const state = paymentState(inv)
-            // Sans le backend, le taux se lit dans la note de la facture : la
-            // liste peut donc annoncer le net dû sans dépendre de SQLite.
-            const { rate, remise, netRemaining } = decomposeInvoice(inv)
-            const pct = inv.ttc > 0 ? Math.min(100, (inv.paid / inv.ttc) * 100) : 0
+            const du = resteDette(inv, histo)
+            // L'avancement se mesure sur la dette éteinte, pas sur l'encaissé :
+            // une remise solde une part de la facture sans être versée.
+            const pct = inv.ttc > 0 ? Math.min(100, ((inv.ttc - du) / inv.ttc) * 100) : 0
             const draft = inv.statut === '0'
-            const settled = netRemaining <= 0.01
+            const settled = du <= 0.01
+            const remise = remiseInfo(inv, histo)
 
             return (
               <li key={inv.id} className="fp-card-slot">
@@ -99,11 +124,14 @@ function FrontInvoicesPage({ client }) {
                     le montant à verser ne soit pas une surprise. */}
                 <div className="fp-card-figures">
                   <span><b>{money(inv.ttc)}</b> TTC facturés</span>
-                  {rate > 0 && (
-                    <span className="fp-paid">− {money(remise)} de remise ({rate} %)</span>
+                  {remise.amount > 0.01 && (
+                    <span className="fp-paid">
+                      − {money(remise.amount)} de remise ({remise.rate} %)
+                    </span>
+
                   )}
-                  <span className="fp-paid">{money(inv.paid)} réglé</span>
-                  <span className="fp-due">{money(netRemaining)} restant</span>
+                  <span className="fp-paid">{money(inv.paid)} versé</span>
+                  <span className="fp-due">{money(du)} restant</span>
                 </div>
 
                 <div className="fp-card-action">

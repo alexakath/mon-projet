@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useParams, useLocation, Link } from 'react-router-dom'
 import {
-  getInvoiceById, getInvoicePayments, paymentState, invoiceVatRate, decomposeInvoice,
+  getInvoiceById, getInvoicePayments, paymentState, invoiceVatRate,
 } from '../../services/invoiceService'
 import {
   resolveAccounts, resolvePaymentTypes, payInvoice, validateInvoice, isCashLabel,
@@ -9,6 +9,8 @@ import {
 } from '../../services/invoiceOps'
 import { toInputDate, fromInputDate } from '../../services/orderService'
 import { getHistoriqueByInvoice, buildHistorique, saveHistorique } from '../../services/historiqueService'
+import { getRemises } from '../../services/remiseService'
+import { quoteReglement, imputeFromPayments } from '../../services/paiementRemise'
 import './FrontPages.css'
 
 const money = (n) =>
@@ -17,11 +19,6 @@ const money = (n) =>
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100
 
 const day = (ts) => (ts ? new Date(ts * 1000).toLocaleDateString('fr-FR') : '—')
-
-// L'historique SQLite fait autorité sur le taux consenti quand il est
-// disponible : il a été écrit à la commande, à partir du barème appliqué.
-const decompose = (invoice, historique) =>
-  decomposeInvoice(invoice, historique ? Number(historique.taux_remise) || 0 : null)
 
 const STATE_PILL = {
   payee: 'state-pill--paid',
@@ -39,6 +36,7 @@ function FrontPaymentPage({ client }) {
   const [accounts, setAccounts] = useState([])
   const [types, setTypes] = useState([])
   const [historique, setHistorique] = useState(null)
+  const [rules, setRules] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [done, setDone] = useState(null)
@@ -56,12 +54,13 @@ function FrontPaymentPage({ client }) {
   })
 
   const load = useCallback(async () => {
-    const [inv, pays, acc, pt, hist] = await Promise.all([
+    const [inv, pays, acc, pt, hist, bareme] = await Promise.all([
       getInvoiceById(id),
       getInvoicePayments(id).catch(() => []),
       resolveAccounts(),
       resolvePaymentTypes(),
       getHistoriqueByInvoice(),
+      getRemises().catch(() => []),
     ])
     const ligne = hist.get(String(id)) ?? null
 
@@ -70,18 +69,22 @@ function FrontPaymentPage({ client }) {
     setAccounts(acc.list)
     setTypes(pt.all)
     setHistorique(ligne)
+    setRules(bareme)
 
-    // Le montant proposé est le **net** restant — remise déduite —, pas le
-    // restant dû de Dolibarr : la facture y est au prix plein, et proposer
-    // 1 000 quand le client en doit 700 le ferait payer la remise.
-    const { netRemaining } = decompose(inv, ligne)
+    // Le montant proposé est la **dette restante au prix plein**, pas un net
+    // remisé : le taux dépend de la date que le client choisira, il n'est donc
+    // pas connu ici. Ce qu'il versera s'affichera une fois la date saisie.
+    const impute = ligne
+      ? Number(ligne.montant_impute) || 0
+      : imputeFromPayments(pays, bareme, inv.date)
+    const reste = round2(Math.max(0, inv.ttc - impute))
 
     setForm((f) => ({
       ...f,
       // Un règlement ne peut pas précéder l'émission de la facture : si la
       // facture est datée dans le futur, c'est elle qui donne la date proposée.
       date: fromInputDate(f.date) < inv.date ? toInputDate(inv.date) : f.date,
-      amount: netRemaining > 0 ? netRemaining.toFixed(2) : '',
+      amount: reste > 0 ? reste.toFixed(2) : '',
       accountId: f.accountId || String(acc.list[0]?.id ?? ''),
       typeId: f.typeId || pt.bank,
       // Le taux de la facture est proposé par défaut. `f.vatRate ||` préserve
@@ -97,6 +100,39 @@ function FrontPaymentPage({ client }) {
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false))
   }, [load])
+
+  // Cumuls déjà acquis sur la facture. SQLite fait autorité : c'est lui qui
+  // garde la dette éteinte, que la somme versée ne suffit pas à retrouver dès
+  // qu'une remise est intervenue. Sans lui, les règlements Dolibarr et le
+  // barème la reconstituent — le trop-perçu, lui, reste perdu : il n'a jamais
+  // été envoyé à Dolibarr.
+  const acquis = useMemo(() => {
+    if (!invoice) return { impute: 0, remise: 0, surplus: 0 }
+    if (historique) {
+      return {
+        impute: Number(historique.montant_impute) || 0,
+        remise: Number(historique.remise_reglement) || 0,
+        surplus: Number(historique.surplus) || 0,
+      }
+    }
+    const impute = imputeFromPayments(payments, rules, invoice.date)
+    return { impute, remise: round2(impute - invoice.paid), surplus: 0 }
+  }, [invoice, historique, payments, rules])
+
+  // Simulation du règlement en cours de saisie, recalculée à chaque frappe de
+  // la date comme du montant : c'est elle qui affiche le montant à verser.
+  const quote = useMemo(
+    () =>
+      quoteReglement({
+        ttc: invoice?.ttc ?? 0,
+        dejaImpute: acquis.impute,
+        rules,
+        dateFacture: invoice?.date,
+        dateReglement: fromInputDate(form.date),
+        montantSaisi: Number(String(form.amount).replace(',', '.')),
+      }),
+    [invoice, acquis.impute, rules, form.date, form.amount]
+  )
 
   // Une facture en brouillon passe d'abord par la validation : elle y gagne sa
   // référence définitive et devient figée. L'API accepterait un règlement sans
@@ -120,18 +156,6 @@ function FrontPaymentPage({ client }) {
     setBusy(true)
     setError(null)
     try {
-      const { rate, remise, net, netRemaining } = decompose(invoice, historique)
-
-      const amount = Number(String(form.amount).replace(',', '.'))
-      if (!Number.isFinite(amount) || amount <= 0) {
-        throw new Error('Saisissez un montant supérieur à zéro.')
-      }
-      // Le plafond est le net remisé, pas le total facturé : au-delà, le client
-      // paierait une remise qui lui a été accordée.
-      if (amount > netRemaining + 0.01) {
-        throw new Error(`Le montant dépasse le reste à payer (${money(netRemaining)}).`)
-      }
-
       // Le navigateur applique déjà `min`, mais l'attribut est contournable et
       // Dolibarr accepterait la date sans broncher : on revérifie ici.
       const paidAt = fromInputDate(form.date)
@@ -143,34 +167,64 @@ function FrontPaymentPage({ client }) {
           `Le règlement ne peut pas être antérieur à l'émission de la facture (${day(invoice.date)}).`
         )
       }
-      await payInvoice({
-        invoiceId: id,
-        amount,
-        date: paidAt,
-        accountId: form.accountId,
-        paymentTypeId: form.typeId,
-        comment: `Règlement en ligne — ${client.name}`,
+
+      const saisi = Number(String(form.amount).replace(',', '.'))
+      if (!Number.isFinite(saisi) || saisi <= 0) {
+        throw new Error('Saisissez un montant supérieur à zéro.')
+      }
+
+      // Le taux se lit sur la date de CE règlement, pas sur la facture : c'est
+      // la rapidité de ce versement-là qui est récompensée. Un second règlement
+      // plus tardif relèvera d'un autre palier, et c'est voulu.
+      //
+      // Aucun plafond n'est opposé à la saisie : ce qui dépasse la dette
+      // devient un trop-perçu, consigné au lieu d'être refusé.
+      const q = quoteReglement({
+        ttc: invoice.ttc,
+        dejaImpute: acquis.impute,
+        rules,
+        dateFacture: invoice.date,
+        dateReglement: paidAt,
+        montantSaisi: saisi,
       })
 
-      const paye = round2(invoice.paid + amount)
-      const solde = paye + 0.01 >= net
+      // Rien n'est envoyé à Dolibarr quand la dette est déjà éteinte : il
+      // refuserait d'encaisser au-delà du restant dû. Le versement est alors
+      // intégralement du trop-perçu, écrit en base locale plus bas.
+      if (q.verse > 0.005) {
+        await payInvoice({
+          invoiceId: id,
+          amount: q.verse,
+          date: paidAt,
+          accountId: form.accountId,
+          paymentTypeId: form.typeId,
+          comment: q.rate > 0
+            ? `Règlement en ligne — ${client.name} (remise ${q.rate} % sur ${money(q.impute)} soldés)`
+            : `Règlement en ligne — ${client.name}`,
+        })
+      }
 
-      // Le net est atteint mais Dolibarr voit encore la remise comme un impayé,
-      // la facture y étant au prix plein. On la classe « payée » avec le motif
-      // escompte : c'est l'écriture par laquelle la remise entre dans Dolibarr,
-      // et elle ne peut se faire qu'ici, une fois l'encaissement enregistré.
+      const cumul = {
+        impute: round2(acquis.impute + q.impute),
+        verse: round2(invoice.paid + q.verse),
+        remise: round2(acquis.remise + q.remise),
+        surplus: round2(acquis.surplus + q.surplus),
+      }
+
+      // Dette éteinte : l'écart entre le prix plein et l'encaissé devient
+      // l'escompte, seule forme sous laquelle la remise entre dans Dolibarr.
+      // Il porte le cumul des remises, pas celle du dernier règlement.
       //
       // L'échec de cette clôture est signalé sans être traité comme un échec du
       // règlement : celui-ci est déjà écrit chez Dolibarr, et le relancer
-      // encaisserait deux fois. La facture reste alors ouverte pour le montant
-      // de la remise, à solder depuis Dolibarr.
+      // encaisserait deux fois.
       let closeError = null
-      if (solde && remise > 0.01) {
+      if (q.solde && cumul.remise > 0.01) {
         try {
           await setInvoicePaid(
             id,
             undefined,
-            `Remise de règlement ${rate} % — ${money(remise)} TTC sur ${money(invoice.ttc)} facturés`
+            `Remise de règlement — ${money(cumul.remise)} TTC sur ${money(invoice.ttc)} facturés`
           )
         } catch (err) {
           closeError = err.message
@@ -185,27 +239,32 @@ function FrontPaymentPage({ client }) {
           client: client.name,
           date: invoice.date,
           montantFacture: invoice.ttc,
-          taux: rate,
-          paye,
+          ...cumul,
+          taux: q.rate,
           dateReglement: paidAt,
         })
       )
 
       await load()
 
+      const trop = q.surplus > 0.01
+        ? ` ${money(q.surplus)} de trop-perçu ont été enregistrés en base locale.`
+        : ''
+
       if (closeError) {
         setError(
-          `Votre règlement de ${money(amount)} est bien enregistré, mais la remise de ` +
-          `${money(remise)} n'a pas pu être portée sur la facture (${closeError}). ` +
+          `Votre règlement de ${money(q.verse)} est bien enregistré, mais la remise de ` +
+          `${money(cumul.remise)} n'a pas pu être portée sur la facture (${closeError}). ` +
           `Ne la réglez pas une seconde fois : signalez-le.`
         )
       } else {
+        const detail =
+          `${money(q.verse)} versés pour ${money(q.impute)} soldés` +
+          (q.remise > 0.01 ? `, remise ${q.rate} % (${money(q.remise)})` : '')
         setDone(
-          solde
-            ? remise > 0.01
-              ? `Règlement enregistré : ${money(amount)} versés, ${money(remise)} de remise de règlement. Votre facture est soldée.`
-              : 'Règlement enregistré. Votre facture est soldée.'
-            : `Règlement enregistré. Il reste ${money(round2(net - paye))} à payer.`
+          q.solde
+            ? `Règlement enregistré : ${detail}. Votre facture est soldée.${trop}`
+            : `Règlement enregistré : ${detail}. Il reste ${money(q.resteApres)} à solder.${trop}`
         )
       }
     } catch (err) {
@@ -227,8 +286,7 @@ function FrontPaymentPage({ client }) {
   }
 
   const state = paymentState(invoice)
-  const { rate, remise, net, netRemaining } = decompose(invoice, historique)
-  const settled = netRemaining <= 0.01
+  const settled = quote.resteAvant <= 0.01
   const draft = invoice.statut === '0'
 
   return (
@@ -268,36 +326,34 @@ function FrontPaymentPage({ client }) {
           <span>Émise le {day(invoice.date)}</span>
           <span>Échéance {day(invoice.dateLimite)}</span>
         </div>
-        {/* Les trois montants que la facture met en jeu : ce qui est facturé
-            au prix plein, ce qui en est remisé, ce qui reste à verser. */}
+
+        {/* La facture reste au prix plein. La remise ne s'y applique pas : elle
+            s'obtient règlement par règlement, selon la date de chacun. */}
         <div className="fp-recap-row">
           <span>Montant facturé TTC</span>
           <span>{money(invoice.ttc)}</span>
         </div>
 
-        {rate > 0 && (
-          <>
-            <div className="fp-recap-row">
-              <span>
-                Remise de règlement {rate} %
-                <span className="fp-recap-rule"> — accordée à l'encaissement</span>
-              </span>
-              <span className="fp-paid">− {money(remise)}</span>
-            </div>
-            <div className="fp-recap-row">
-              <span>Net à payer</span>
-              <span>{money(net)}</span>
-            </div>
-          </>
-        )}
-
         <div className="fp-recap-row">
-          <span>Déjà réglé</span>
+          <span>Déjà versé</span>
           <span className="fp-paid">{money(invoice.paid)}</span>
         </div>
+        {acquis.remise > 0.01 && (
+          <div className="fp-recap-row">
+            <span>Remises déjà obtenues</span>
+            <span className="fp-paid">− {money(acquis.remise)}</span>
+          </div>
+        )}
+        {acquis.surplus > 0.01 && (
+          <div className="fp-recap-row">
+            <span>Sur plus</span>
+            <span className="fp-due">{money(acquis.surplus)}</span>
+          </div>
+        )}
+        {/* La dette se compte au prix plein : versé + remises = dette éteinte. */}
         <div className="fp-recap-row fp-recap-row--total">
-          <span>Reste à payer</span>
-          <span className={settled ? 'fp-paid' : 'fp-due'}>{money(netRemaining)}</span>
+          <span>Reste à solder</span>
+          <span className={settled ? 'fp-paid' : 'fp-due'}>{money(quote.resteAvant)}</span>
         </div>
       </section>
 
@@ -357,7 +413,10 @@ function FrontPaymentPage({ client }) {
                 required
               />
               <span className="fp-field-hint">
-                Au plus tôt le {day(invoice.date)}, date d'émission de la facture.
+                Au plus tôt le {day(invoice.date)}, date d'émission.
+                {quote.rule
+                  ? ` Palier « ${quote.rule.libelle} » : ${quote.rate} % de remise.`
+                  : ' Aucun palier ne couvre ce délai : pas de remise.'}
               </span>
             </label>
 
@@ -392,7 +451,7 @@ function FrontPaymentPage({ client }) {
             </label>
 
             <label className="fp-field">
-              <span className="fp-field-label">Montant</span>
+              <span className="fp-field-label">Montant à solder</span>
               <input
                 type="text"
                 inputMode="decimal"
@@ -403,17 +462,42 @@ function FrontPaymentPage({ client }) {
                 required
               />
               <span className="fp-field-hint">
-                Reste à payer : {money(netRemaining)} — un montant inférieur est accepté.
-                {rate > 0 && ` La remise de ${rate} % est déjà déduite.`}
+                Part de la facture que vous soldez, au prix plein — il reste
+                {' '}{money(quote.resteAvant)}.
               </span>
             </label>
+          </div>
+
+          {/* Ce que la saisie donne réellement, recalculé à chaque frappe : le
+              client voit ce qu'il décaisse avant de valider, et pourquoi. */}
+          <div className="fp-recap-row">
+            <span>Soldé sur la facture</span>
+            <span>{money(quote.impute)}</span>
+          </div>
+          {quote.rate > 0 && (
+            <div className="fp-recap-row">
+              <span>
+                Remise du jour choisi — {quote.rate} %
+                {quote.rule && <span className="fp-recap-rule"> — {quote.rule.libelle}</span>}
+              </span>
+              <span className="fp-paid">− {money(quote.remise)}</span>
+            </div>
+          )}
+          {quote.surplus > 0.01 && (
+            <div className="fp-recap-row">
+              <span>Trop-perçu — au-delà de ce que vous devez</span>
+              <span className="fp-due">{money(quote.surplus)}</span>
+            </div>
+          )}
+          <div className="fp-recap-row fp-recap-row--total">
+            <span>Montant à verser</span>
+            <span>{money(quote.verse + quote.surplus)}</span>
           </div>
 
           {error && <div className="fp-error">{error}</div>}
 
           <button type="submit" className="fp-submit" disabled={busy}>
             {busy ? 'Enregistrement…' : 'Enregistrer le règlement'}
-            
           </button>
         </form>
       )}

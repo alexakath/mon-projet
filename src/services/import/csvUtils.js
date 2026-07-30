@@ -58,6 +58,28 @@ export const getCi = (row, ...keys) => {
   return ''
 }
 
+// Même lecture, mais pour la **dernière** colonne d'une ligne, où une décimale
+// française non protégée par des guillemets est coupée par le séparateur :
+//
+//   F002,30/07/2026,Caisse1,1622,4
+//
+// Papa lit alors quatre colonnes — montant = « 1622 » — et range le « 4 » dans
+// `__parsed_extra`. Sans recollage, les centimes disparaissent : la facture
+// reste due de 0,40 et la remise se calcule sur une assiette fausse.
+//
+// Le recollage n'a lieu que si tout se lit comme un nombre : une vraie colonne
+// surnuméraire (texte, date) reste ignorée plutôt que d'être agglutinée au
+// montant.
+export const getCiDecimal = (row, ...keys) => {
+  const value = getCi(row, ...keys)
+  const extra = (row.__parsed_extra ?? []).map((v) => String(v ?? '').trim())
+
+  if (!/^-?\d+$/.test(value)) return value
+  if (extra.length === 0 || !extra.every((part) => /^\d+$/.test(part))) return value
+
+  return [value, ...extra].join(',')
+}
+
 // ─── Conversions ──────────────────────────────────────────────────────────────
 
 // "1 800,50" et "1800.50" donnent tous deux 1800.5.

@@ -1,4 +1,5 @@
 import { dolibarrFetch, dolibarrList } from './dolibarrApi'
+import { daysBetween } from './remiseService'
 
 // Dolibarr renvoie ses montants en chaînes ("5562.00000000") et calcule déjà
 // `totalpaid` et `remaintopay` : inutile d'interroger les règlements facture
@@ -112,31 +113,9 @@ function normalizeInvoice(inv, clientName) {
   }
 }
 
-// ─── Décomposition d'une facture émise au prix plein ─────────────────────────
+// ─── Arrondi partagé ─────────────────────────────────────────────────────────
 
 const round2 = (n) => Math.round(n * 100) / 100
-
-// Sépare les trois montants d'une facture remisée : ce qui est facturé, ce qui
-// est remisé, ce qui reste à verser.
-//
-// Le point délicat est la source du taux, qui change selon l'état de la facture.
-// Tant qu'elle n'est pas soldée, Dolibarr n'en sait rien — la facture y est au
-// prix plein — et le taux vient de la note, ou de `rateOverride` quand
-// l'appelant dispose de l'historique SQLite, qui fait autorité. Une fois la
-// facture close par l'escompte, la remise est inscrite dans les montants
-// eux-mêmes : c'est elle qui prime, et le taux s'en déduit.
-//
-// `netRemaining` est le montant réellement dû. C'est lui qui doit borner un
-// règlement, jamais `remaining` : celui-ci porte encore la remise.
-export function decomposeInvoice(invoice, rateOverride = null) {
-  const closed = invoice.remiseReglement > 0 || invoice.remaining <= 0.01
-
-  const rate = closed ? invoice.remiseRate : rateOverride ?? invoice.remiseRate
-  const remise = closed ? invoice.remiseReglement : round2((invoice.ttc * rate) / 100)
-  const net = round2(invoice.ttc - remise)
-
-  return { rate, remise, net, netRemaining: round2(Math.max(0, net - invoice.paid)) }
-}
 
 // ─── TVA d'une facture ───────────────────────────────────────────────────────
 
@@ -291,4 +270,28 @@ export function totals(invoices) {
     }),
     { count: 0, ht: 0, ttc: 0, paid: 0, remaining: 0, remise: 0 }
   )
+}
+
+// ─── Impayés ────────────────────────────────────────────────────────────────
+
+// Une facture est due tant qu'il reste un montant à percevoir. Le seuil d'un
+// centime évite qu'un arrondi fasse ressortir une facture soldée. Les avoirs
+// portent des montants négatifs : ils sont écartés sans test sur le type.
+export function isUnpaid(invoice) {
+  return invoice.remaining > 0.01
+}
+
+// Échéance la plus proche en premier. Une facture sans date limite passe en
+// dernier plutôt que de remonter en tête sur une comparaison avec null.
+export function unpaidInvoices(invoices) {
+  const dueAt = (inv) => inv.dateLimite ?? Number.MAX_SAFE_INTEGER
+  return invoices.filter(isUnpaid).sort((a, b) => dueAt(a) - dueAt(b))
+}
+
+// Jours de retard : 0 tant que l'échéance n'est pas dépassée, null si la
+// facture n'en porte pas. `daysBetween` ramène les dates à minuit, donc une
+// facture échue aujourd'hui compte 0 jour de retard et non 1.
+export function overdueDays(invoice, nowTs = Math.floor(Date.now() / 1000)) {
+  if (!invoice.dateLimite) return null
+  return Math.max(0, daysBetween(invoice.dateLimite, nowTs))
 }
